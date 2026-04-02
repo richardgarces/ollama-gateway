@@ -241,6 +241,31 @@ function safeJSONParse(raw) {
   }
 }
 
+function normalizeLanguageId(id) {
+  const v = String(id || '').toLowerCase();
+  const map = {
+    javascript: 'javascript',
+    typescript: 'typescript',
+    python: 'python',
+    go: 'go',
+    java: 'java',
+    rust: 'rust',
+    c: 'c',
+    cpp: 'cpp',
+    csharp: 'csharp',
+    ruby: 'ruby',
+    php: 'php',
+  };
+  return map[v] || v || 'unknown';
+}
+
+function targetEditorLanguage(toLang) {
+  const v = String(toLang || '').toLowerCase();
+  if (v === 'csharp') return 'csharp';
+  if (v === 'cpp') return 'cpp';
+  return v || 'plaintext';
+}
+
 // ---------------------------------------------------------------------------
 // Chat Panel (Webview)
 // ---------------------------------------------------------------------------
@@ -494,6 +519,130 @@ function activate(context) {
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         vscode.window.showErrorMessage('Debug analysis failed: ' + msg);
+      }
+    }),
+  );
+
+  // Translate current selection using backend translator endpoint
+  context.subscriptions.push(
+    vscode.commands.registerCommand('copilot-local.translateSelection', async () => {
+      const editor = vscode.window.activeTextEditor;
+      if (!editor) {
+        vscode.window.showInformationMessage('No active editor');
+        return;
+      }
+
+      const selected = editor.document.getText(editor.selection.isEmpty ? undefined : editor.selection).trim();
+      if (!selected) {
+        vscode.window.showInformationMessage('No hay contenido para traducir');
+        return;
+      }
+
+      const options = [
+        { label: 'Go', value: 'go' },
+        { label: 'Python', value: 'python' },
+        { label: 'TypeScript', value: 'typescript' },
+        { label: 'JavaScript', value: 'javascript' },
+        { label: 'Java', value: 'java' },
+        { label: 'Rust', value: 'rust' },
+        { label: 'C#', value: 'csharp' },
+        { label: 'C++', value: 'cpp' },
+      ];
+      const picked = await vscode.window.showQuickPick(options, {
+        title: 'Translate Selection',
+        placeHolder: 'Elige lenguaje destino',
+      });
+      if (!picked) {
+        return;
+      }
+
+      const from = normalizeLanguageId(editor.document.languageId);
+      try {
+        const result = await postJSON('/api/translate', {
+          code: selected,
+          from,
+          to: picked.value,
+        });
+
+        const translated = (result && result.translated_code) ? String(result.translated_code) : '';
+        if (!translated) {
+          vscode.window.showErrorMessage('La API no devolvió translated_code');
+          return;
+        }
+
+        const doc = await vscode.workspace.openTextDocument({
+          content: translated,
+          language: targetEditorLanguage(picked.value),
+        });
+        await vscode.window.showTextDocument(doc, { preview: false, viewColumn: vscode.ViewColumn.Beside });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        vscode.window.showErrorMessage('Translate failed: ' + msg);
+      }
+    }),
+  );
+
+  // Generate unit tests for selection or current file
+  context.subscriptions.push(
+    vscode.commands.registerCommand('copilot-local.addTests', async () => {
+      const editor = vscode.window.activeTextEditor;
+      if (!editor) {
+        vscode.window.showInformationMessage('No active editor');
+        return;
+      }
+
+      const mode = await vscode.window.showQuickPick([
+        { label: 'Generate tests from selection/current file', value: 'generate' },
+        { label: 'Generate and apply tests for current file', value: 'apply' },
+      ], {
+        title: 'Add Tests',
+        placeHolder: 'Elige el modo de generación',
+      });
+      if (!mode) {
+        return;
+      }
+
+      const selected = editor.document.getText(editor.selection.isEmpty ? undefined : editor.selection).trim();
+      const fullText = editor.document.getText().trim();
+      const code = selected || fullText;
+      if (!code && mode.value === 'generate') {
+        vscode.window.showInformationMessage('No hay contenido para generar tests');
+        return;
+      }
+
+      try {
+        let result;
+        if (mode.value === 'apply') {
+          result = await postJSON('/api/testgen/file', {
+            path: editor.document.fileName,
+            apply: true,
+          });
+        } else {
+          const lang = normalizeLanguageId(editor.document.languageId);
+          result = await postJSON('/api/testgen', {
+            code,
+            lang,
+          });
+        }
+
+        const testCode = (result && result.test_code) ? String(result.test_code) : '';
+        if (!testCode) {
+          vscode.window.showErrorMessage('La API no devolvió test_code');
+          return;
+        }
+
+        const doc = await vscode.workspace.openTextDocument({
+          content: testCode,
+          language: editor.document.languageId || 'plaintext',
+        });
+        await vscode.window.showTextDocument(doc, { preview: false, viewColumn: vscode.ViewColumn.Beside });
+
+        if (mode.value === 'apply' && result.applied_path) {
+          vscode.window.showInformationMessage('Tests aplicados en: ' + result.applied_path);
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        vscode.window.showErrorMessage('Add tests failed: ' + msg);
       }
     }),
   );

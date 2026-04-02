@@ -9,7 +9,9 @@
   "activationEvents": [
     "onCommand:copilot-local.sendSelection",
     "onCommand:copilot-local.openChat",
-    "onCommand:copilot-local.debugError"
+    "onCommand:copilot-local.debugError",
+    "onCommand:copilot-local.translateSelection",
+    "onCommand:copilot-local.addTests"
   ],
   "main": "extension.js",
   "contributes": {
@@ -25,6 +27,14 @@
       {
         "command": "copilot-local.debugError",
         "title": "Copilot Local: Debug Error"
+      },
+      {
+        "command": "copilot-local.translateSelection",
+        "title": "Copilot Local: Translate Selection"
+      },
+      {
+        "command": "copilot-local.addTests",
+        "title": "Copilot Local: Add Tests"
       }
     ],
     "keybindings": [
