@@ -8,7 +8,8 @@
   },
   "activationEvents": [
     "onCommand:copilot-local.sendSelection",
-    "onCommand:copilot-local.openChat"
+    "onCommand:copilot-local.openChat",
+    "onCommand:copilot-local.debugError"
   ],
   "main": "extension.js",
   "contributes": {
@@ -20,6 +21,10 @@
       {
         "command": "copilot-local.openChat",
         "title": "Copilot Local: Open Chat Panel"
+      },
+      {
+        "command": "copilot-local.debugError",
+        "title": "Copilot Local: Debug Error"
       }
     ],
     "keybindings": [

@@ -4,6 +4,8 @@ import (
 	"log/slog"
 	"net/http"
 	"time"
+
+	"ollama-gateway/internal/observability"
 )
 
 type statusRecorder struct {
@@ -17,20 +19,43 @@ func (r *statusRecorder) WriteHeader(code int) {
 }
 
 func Logging(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-		rec := &statusRecorder{ResponseWriter: w, statusCode: http.StatusOK}
+	return LoggingWithStream(nil)(next)
+}
 
-		next.ServeHTTP(rec, r)
+func LoggingWithStream(stream *observability.LogStream) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			start := time.Now()
+			rec := &statusRecorder{ResponseWriter: w, statusCode: http.StatusOK}
 
-		slog.Info("http request",
-			slog.String("request_id", RequestIDFromContext(r.Context())),
-			slog.String("method", r.Method),
-			slog.String("path", r.URL.Path),
-			slog.Int("status", rec.statusCode),
-			slog.Duration("latency", time.Since(start)),
-		)
-	})
+			next.ServeHTTP(rec, r)
+
+			latency := time.Since(start)
+			requestID := RequestIDFromContext(r.Context())
+			slog.Info("http request",
+				slog.String("request_id", requestID),
+				slog.String("method", r.Method),
+				slog.String("path", r.URL.Path),
+				slog.Int("status", rec.statusCode),
+				slog.Duration("latency", latency),
+			)
+
+			if stream != nil {
+				stream.Publish(observability.LogEvent{
+					Timestamp: time.Now().UTC(),
+					Level:     "info",
+					Message:   "http request",
+					Fields: map[string]interface{}{
+						"request_id": requestID,
+						"method":     r.Method,
+						"path":       r.URL.Path,
+						"status":     rec.statusCode,
+						"latency_ms": latency.Milliseconds(),
+					},
+				})
+			}
+		})
+	}
 }
 
 func CORS(next http.Handler) http.Handler {

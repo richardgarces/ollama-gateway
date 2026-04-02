@@ -39,6 +39,7 @@ func New(cfg *config.Config, cacheBackend cache.Cache) *Server {
 func (s *Server) setupRoutes() {
 	logger := slog.Default()
 	metricsCollector := observability.NewMetricsCollector()
+	logStream := observability.NewLogStream(500)
 	rateLimiter := observability.NewRateLimiter(s.cfg.RateLimitRPM, time.Minute)
 	repoRoots := s.cfg.RepoRoots
 	if len(repoRoots) == 0 {
@@ -83,6 +84,9 @@ func (s *Server) setupRoutes() {
 		s.cfg.RAGCacheTTLSeconds,
 		s.cfg.RAGCacheMaxEntries,
 	)
+	reviewService := services.NewReviewService(ragService, s.cfg.RepoRoot, logger)
+	docGenService := services.NewDocGenService(ragService, s.cfg.RepoRoot, logger)
+	debugService := services.NewDebugService(ragService, s.cfg.RepoRoot, logger)
 	indexerService, _ := services.NewIndexerService(repoRoots, s.cfg.IndexerStatePath, ollamaService, qdrantService, logger)
 	indexerService.SetOnContentChange(ragService.InvalidateResponseCache)
 
@@ -99,15 +103,20 @@ func (s *Server) setupRoutes() {
 	agentHandler := handlers.NewAgentHandler(agentRunner)
 	chatHandler := handlers.NewChatHandler(ragEngine)
 	repoHandler := handlers.NewRepoHandler(repoService)
+	reviewHandler := handlers.NewReviewHandler(reviewService)
+	docGenHandler := handlers.NewDocGenHandler(docGenService)
+	debugHandler := handlers.NewDebugHandler(debugService)
 	profileHandler := handlers.NewProfileHandler(s.profileService)
 	patchHandler := handlers.NewPatchHandler(s.cfg.RepoRoot, patchService)
 	metricsHandler := handlers.NewMetricsHandler(metricsCollector)
 	indexerHandler := handlers.NewIndexerHandler(indexer)
+	dashboardHandler := handlers.NewDashboardHandler(s.cfg, metricsCollector, indexerService, logStream)
 	searchHandler := handlers.NewSearchHandler(ollamaClient, vectorStore, repoRoots)
 	openaiHandler := handlers.NewOpenAIHandler(ollamaClient, ragEngine, s.conversationService, s.profileService)
 	wsHandler := handlers.NewWSHandler(ragEngine, s.cfg.JWTSecret)
 	healthHandler := handlers.NewHealthHandler(s.cfg)
 	authMiddleware := middleware.NewAuthMiddleware(s.cfg.JWTSecret)
+	localhostOnly := middleware.LocalhostOnly
 
 	mux := http.NewServeMux()
 
@@ -120,11 +129,17 @@ func (s *Server) setupRoutes() {
 	mux.Handle("GET /metrics/prometheus", promhttp.Handler())
 	mux.HandleFunc("POST /login", authHandler.Login)
 
-	// Indexer control (internal)
-	mux.HandleFunc("POST /internal/index/reindex", indexerHandler.Reindex)
-	mux.HandleFunc("POST /internal/index/start", indexerHandler.StartWatcher)
-	mux.HandleFunc("POST /internal/index/stop", indexerHandler.StopWatcher)
-	mux.HandleFunc("POST /internal/index/reset", indexerHandler.ResetState)
+	// Dashboard interno (solo localhost)
+	mux.Handle("GET /dashboard", localhostOnly(http.HandlerFunc(dashboardHandler.Handle)))
+	mux.Handle("GET /internal/dashboard/status", localhostOnly(http.HandlerFunc(dashboardHandler.Status)))
+	mux.Handle("GET /internal/logs/stream", localhostOnly(http.HandlerFunc(dashboardHandler.LogsStream)))
+
+	// Indexer control (internal, solo localhost)
+	mux.Handle("GET /internal/index/status", localhostOnly(http.HandlerFunc(indexerHandler.Status)))
+	mux.Handle("POST /internal/index/reindex", localhostOnly(http.HandlerFunc(indexerHandler.Reindex)))
+	mux.Handle("POST /internal/index/start", localhostOnly(http.HandlerFunc(indexerHandler.StartWatcher)))
+	mux.Handle("POST /internal/index/stop", localhostOnly(http.HandlerFunc(indexerHandler.StopWatcher)))
+	mux.Handle("POST /internal/index/reset", localhostOnly(http.HandlerFunc(indexerHandler.ResetState)))
 	mux.HandleFunc("POST /api/search", searchHandler.Handle)
 	// OpenAI-compatible endpoints
 	mux.HandleFunc("POST /openai/v1/embeddings", openaiHandler.Embeddings)
@@ -137,6 +152,12 @@ func (s *Server) setupRoutes() {
 	mux.Handle("POST /api/agent", authMiddleware.JWT(http.HandlerFunc(agentHandler.Handle)))
 	mux.Handle("POST /api/refactor", authMiddleware.JWT(http.HandlerFunc(repoHandler.Refactor)))
 	mux.Handle("GET /api/analyze-repo", authMiddleware.JWT(http.HandlerFunc(repoHandler.Analyze)))
+	mux.Handle("POST /api/review/diff", authMiddleware.JWT(http.HandlerFunc(reviewHandler.ReviewDiff)))
+	mux.Handle("POST /api/review/file", authMiddleware.JWT(http.HandlerFunc(reviewHandler.ReviewFile)))
+	mux.Handle("POST /api/docs/file", authMiddleware.JWT(http.HandlerFunc(docGenHandler.GenerateFileDoc)))
+	mux.Handle("POST /api/docs/readme", authMiddleware.JWT(http.HandlerFunc(docGenHandler.GenerateREADME)))
+	mux.Handle("POST /api/debug/error", authMiddleware.JWT(http.HandlerFunc(debugHandler.AnalyzeError)))
+	mux.Handle("POST /api/debug/log", authMiddleware.JWT(http.HandlerFunc(debugHandler.AnalyzeLog)))
 	mux.Handle("POST /api/v1/chat/completions", authMiddleware.JWT(http.HandlerFunc(chatHandler.Handle)))
 	mux.Handle("GET /api/profile", authMiddleware.JWT(http.HandlerFunc(profileHandler.Get)))
 	mux.Handle("PUT /api/profile", authMiddleware.JWT(http.HandlerFunc(profileHandler.Put)))
@@ -146,7 +167,7 @@ func (s *Server) setupRoutes() {
 	s.router = chain(
 		mux,
 		middleware.RequestID,
-		middleware.Logging,
+		middleware.LoggingWithStream(logStream),
 		middleware.CORS,
 		middleware.Compress,
 		middleware.Metrics(metricsCollector),

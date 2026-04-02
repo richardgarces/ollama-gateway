@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"ollama-gateway/internal/domain"
 	"ollama-gateway/pkg/reposcope"
@@ -38,10 +39,12 @@ type IndexerService struct {
 	// fileHashes stores last seen hash to skip unchanged files (in-memory)
 	fileHashes map[string]string
 	// gitignore matcher
-	ign      *ignorepkg.GitIgnore
-	logger   *slog.Logger
-	onChange func()
-	analyzer *ASTAnalyzer
+	ign           *ignorepkg.GitIgnore
+	logger        *slog.Logger
+	onChange      func()
+	analyzer      *ASTAnalyzer
+	reindexing    bool
+	lastReindexAt time.Time
 }
 
 var _ domain.Indexer = (*IndexerService)(nil)
@@ -101,6 +104,16 @@ func (s *IndexerService) notifyContentChange() {
 
 // IndexRepo walks the repoRoot and indexes supported files.
 func (s *IndexerService) IndexRepo() error {
+	s.mu.Lock()
+	s.reindexing = true
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		s.reindexing = false
+		s.lastReindexAt = time.Now().UTC()
+		s.mu.Unlock()
+	}()
+
 	for _, repoRoot := range s.repoRoots {
 		files := []string{}
 		err := filepath.Walk(repoRoot, func(path string, info os.FileInfo, err error) error {
@@ -133,6 +146,23 @@ func (s *IndexerService) IndexRepo() error {
 		}
 	}
 	return nil
+}
+
+func (s *IndexerService) Status() map[string]interface{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	lastReindex := ""
+	if !s.lastReindexAt.IsZero() {
+		lastReindex = s.lastReindexAt.Format(time.RFC3339)
+	}
+
+	return map[string]interface{}{
+		"indexed_files":   len(s.fileHashes),
+		"watcher_active":  s.running,
+		"reindexing":      s.reindexing,
+		"last_reindex_at": lastReindex,
+	}
 }
 
 func shouldIndexFile(path string) bool {

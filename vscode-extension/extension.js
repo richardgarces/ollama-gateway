@@ -191,6 +191,56 @@ function streamCLI(prompt, onChunk, onDone) {
   proc.on('error', (e) => onDone(e));
 }
 
+/**
+ * Send JSON to gateway endpoint and parse JSON response.
+ * @param {string} endpoint
+ * @param {object} payload
+ * @returns {Promise<any>}
+ */
+function postJSON(endpoint, payload) {
+  const { apiUrl, jwtToken } = getConfig();
+  const url = new URL(apiUrl + endpoint);
+  const lib = url.protocol === 'https:' ? https : http;
+
+  const body = JSON.stringify(payload || {});
+  const headers = {
+    'Content-Type': 'application/json',
+    'Content-Length': Buffer.byteLength(body),
+  };
+  if (jwtToken) {
+    headers['Authorization'] = 'Bearer ' + jwtToken;
+  }
+
+  return new Promise((resolve, reject) => {
+    const req = lib.request(url, { method: 'POST', headers }, (res) => {
+      let raw = '';
+      res.on('data', (chunk) => { raw += chunk.toString(); });
+      res.on('end', () => {
+        const status = res.statusCode || 0;
+        const parsed = raw ? safeJSONParse(raw) : {};
+        if (status < 200 || status >= 300) {
+          const message = parsed?.error || ('HTTP ' + status);
+          reject(new Error(message));
+          return;
+        }
+        resolve(parsed || {});
+      });
+      res.on('error', reject);
+    });
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+}
+
+function safeJSONParse(raw) {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return { raw };
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Chat Panel (Webview)
 // ---------------------------------------------------------------------------
@@ -285,6 +335,8 @@ function getChatPanelHTML() {
     } else if (msg.type === 'prefill') {
       promptEl.value = msg.text;
       promptEl.focus();
+    } else if (msg.type === 'externalResult') {
+      addMsg('assistant', msg.text || '');
     }
   });
 </script>
@@ -394,6 +446,55 @@ function activate(context) {
           chatPanel.webview.postMessage({ type: 'prefill', text });
         }
       });
+    }),
+  );
+
+  // Analyze selected stack trace using backend debug endpoint
+  context.subscriptions.push(
+    vscode.commands.registerCommand('copilot-local.debugError', async () => {
+      const editor = vscode.window.activeTextEditor;
+      const selected = editor?.document.getText(editor.selection.isEmpty ? undefined : editor.selection)?.trim() || '';
+      const clipboard = (await vscode.env.clipboard.readText()).trim();
+      const initial = selected || clipboard;
+
+      const stackTrace = await vscode.window.showInputBox({
+        title: 'Debug Error',
+        prompt: 'Pega stack trace o logs de error para analizar',
+        value: initial,
+        ignoreFocusOut: true,
+      });
+      if (!stackTrace || !stackTrace.trim()) {
+        vscode.window.showInformationMessage('No hay contenido para analizar');
+        return;
+      }
+
+      try {
+        const result = await postJSON('/api/debug/error', { stack_trace: stackTrace });
+        const text = [
+          'Root cause: ' + (result.root_cause || 'N/A'),
+          '',
+          'Explanation:',
+          result.explanation || 'N/A',
+          '',
+          'Suggested fixes:',
+          ...(Array.isArray(result.suggested_fixes) && result.suggested_fixes.length > 0
+            ? result.suggested_fixes.map((v) => '- ' + v)
+            : ['- N/A']),
+          '',
+          'Related files:',
+          ...(Array.isArray(result.related_files) && result.related_files.length > 0
+            ? result.related_files.map((v) => '- ' + v)
+            : ['- N/A']),
+        ].join('\n');
+
+        await vscode.commands.executeCommand('copilot-local.openChat');
+        if (chatPanel) {
+          chatPanel.webview.postMessage({ type: 'externalResult', text });
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        vscode.window.showErrorMessage('Debug analysis failed: ' + msg);
+      }
     }),
   );
 }
