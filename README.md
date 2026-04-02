@@ -12,7 +12,7 @@ Ollama SaaS Gateway es un servidor en Go diseñado para convertir una instalaci�
 ## **Sección Técnica**
 
 - Lenguaje: Go (módulos Go). Arquitectura limpia (cmd/, internal/, pkg/).
-- Enrutador y middlewares: `gorilla/mux`, middlewares para JWT, request-id, rate limiting y métricas.
+- Enrutador y middlewares: `net/http` (`http.ServeMux` con method patterns), middlewares para JWT, request-id, rate limiting y métricas.
 - Integraciones principales:
 	- Ollama: generación y embeddings (cliente con cache LRU+TTL).
 	- Qdrant: vector DB para búsquedas RAG (con fallback a store en disco).
@@ -60,6 +60,12 @@ cd api
 go build ./cmd/server
 go test ./...
 ```
+
+## Instalación
+
+- Guía principal de instalación y operación: [INSTALL.md](INSTALL.md)
+- Compose de API + Qdrant + Mongo: [docker-compose.yml](docker-compose.yml)
+- Compose separado para Ollama + WebUI: [docker-compose.ollama.yml](docker-compose.ollama.yml)
 
 ## Endpoints principales (resumen)
 

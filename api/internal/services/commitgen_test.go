@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +17,29 @@ func TestCommitGenGenerateMessage(t *testing.T) {
 	}
 	if strings.TrimSpace(out) == "" {
 		t.Fatalf("expected non-empty commit message")
+	}
+}
+
+func TestCommitGenGenerateMessageRejectsEmptyDiff(t *testing.T) {
+	svc := NewCommitGenService(fakeRAG{response: "feat(api): add endpoint"}, t.TempDir(), nil)
+	if _, err := svc.GenerateMessage("   "); err == nil {
+		t.Fatalf("expected error for empty diff")
+	}
+}
+
+func TestCommitGenGenerateMessageTruncatesLargeDiff(t *testing.T) {
+	var capturedPrompt string
+	rag := fakeRAGRecorder{onPrompt: func(prompt string) { capturedPrompt = prompt }, response: "fix(core): update"}
+	svc := NewCommitGenService(rag, t.TempDir(), nil)
+	big := strings.Repeat("a", commitGenMaxDiffChars+123)
+	if _, err := svc.GenerateMessage(big); err != nil {
+		t.Fatalf("GenerateMessage error: %v", err)
+	}
+	if len(capturedPrompt) == 0 {
+		t.Fatalf("expected captured prompt")
+	}
+	if strings.Count(capturedPrompt, "a") < commitGenMaxDiffChars {
+		t.Fatalf("expected large diff included in prompt")
 	}
 }
 
@@ -58,4 +82,27 @@ func TestCommitGenGenerateFromStaged(t *testing.T) {
 	if !strings.Contains(out, "feat") {
 		t.Fatalf("unexpected commit message: %q", out)
 	}
+}
+
+func TestRunGitDiffCachedFailure(t *testing.T) {
+	ctx := context.Background()
+	if _, err := runGitDiffCached(ctx, "/path/does-not-exist"); err == nil {
+		t.Fatalf("expected git diff helper to fail on invalid repo")
+	}
+}
+
+type fakeRAGRecorder struct {
+	onPrompt func(string)
+	response string
+}
+
+func (f fakeRAGRecorder) GenerateWithContext(prompt string) (string, error) {
+	if f.onPrompt != nil {
+		f.onPrompt(prompt)
+	}
+	return f.response, nil
+}
+
+func (f fakeRAGRecorder) StreamGenerateWithContext(prompt string, onChunk func(string) error) error {
+	return nil
 }

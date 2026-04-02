@@ -1,0 +1,23 @@
+sequenceDiagram
+  participant Dev as Dev o Extension
+  participant API as API Gateway
+  participant MW as Middleware JWT y Observabilidad
+  participant H as Handler
+  participant R as RAGService
+  participant Q as Qdrant
+  participant O as Ollama
+
+  Dev->>API: POST endpoint protegido
+  API->>MW: JWT + request-id + rate limit + metrics
+  MW->>H: Request validada
+  H->>R: GenerateWithContext(prompt)
+  R->>Q: Buscar contexto semantico
+  Q-->>R: Chunks relevantes
+  R->>O: Prompt enriquecido
+  O-->>R: Respuesta del modelo
+  R-->>H: Resultado final
+  H-->>API: JSON response
+  API-->>Dev: 200 OK
+
+  Note over API,R: Si el Indexer detecta cambios, invalida cache de respuestas RAG
+  Note over H,Dev: En sesiones compartidas, el mensaje tambien se guarda en SessionService

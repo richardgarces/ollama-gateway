@@ -1,60 +1,71 @@
-# Instalación y despliegue mínimo
+# Instalacion y despliegue operativo
 
-Objetivo: dejar la API en ejecución conectada a una instancia de Ollama (máquina A) y a servicios de datos (máquina B).
+Objetivo: dejar el gateway funcionando con Ollama desacoplado de la API.
 
-Requisitos (máquina API):
-- Go 1.24+ instalado.
-- Acceso de red hacia la máquina A (OLLAMA_URL) y máquina B (QDRANT_URL, MONGO_URL).
-- Variables de entorno configuradas (ver `ENV_VARS.md`).
+Topologia recomendada:
 
-Pasos resumidos:
+- Compose 1: API + Qdrant + Mongo.
+- Compose 2: Ollama + WebUI.
 
-1) Clonar el repo en la máquina que ejecutará la API:
+Archivos relevantes:
+
+- [docker-compose.yml](../../docker-compose.yml)
+- [docker-compose.ollama.yml](../../docker-compose.ollama.yml)
+- [ENV_VARS.md](ENV_VARS.md)
+
+## Opcion A: todo en una misma maquina
+
+1. Levantar Ollama/WebUI:
 
 ```bash
-git clone <repo> && cd ollama_saas_project/api
+cd <repo-root>
+docker compose -f docker-compose.ollama.yml up -d
 ```
 
-2) Copiar ejemplo de variables de entorno y ajustar:
+2. Levantar API/Qdrant/Mongo:
 
 ```bash
-cp .env.example .env
-# editar .env con OLLAMA_URL (máquina A) y QDRANT_URL/MONGO_URL (máquina B)
+docker compose -f docker-compose.yml up -d
 ```
 
-3) Instalar dependencias y compilar (opcional):
+3. Verificar:
 
 ```bash
+curl -fsS http://localhost:11434/ >/dev/null && echo "ollama ok"
+curl -fsS http://localhost:8081/health | cat
+curl -fsS http://localhost:6333/ | cat
+```
+
+## Opcion B: despliegue distribuido (A/B)
+
+- Maquina A: Ollama.
+- Maquina B: Qdrant + Mongo.
+- Maquina API: servidor Go.
+
+Variables minimas en maquina API:
+
+```bash
+export PORT=8081
+export OLLAMA_URL=http://<A_HOST>:11434
+export QDRANT_URL=http://<B_HOST>:6333
+export MONGO_URI=mongodb://admin:<password>@<B_HOST>:27017
+export JWT_SECRET="$(openssl rand -hex 32)"
+```
+
+Para levantar solo servicios de datos en B, puedes usar [docker-compose-machine-b.yml](docker-compose-machine-b.yml).
+
+## Ejecutar API en modo binario (sin Docker)
+
+```bash
+cd <repo-root>/api
 go mod tidy
 go build -o bin/server ./cmd/server
+./bin/server
 ```
 
-4) Ejecutar directamente (modo desarrollo):
+## Notas de seguridad
 
-```bash
-PORT=8081 JWT_SECRET="$(openssl rand -hex 32)" OLLAMA_URL=http://<ollama-host>:11434 ./bin/server
-```
-
-5) Ejecutar como servicio (sugerencia systemd):
-- Crear `/etc/systemd/system/ollama-gateway.service` con `ExecStart=/opt/ollama-gateway/bin/server` y las variables de entorno.
-- Recargar y arrancar: `systemctl daemon-reload && systemctl start ollama-gateway`.
-
-Nota sobre red y seguridad:
-- Ollama puede estar en otra máquina; asegúrate de que el puerto (por defecto 11434) esté accesible desde la máquina API y que haya reglas de firewall adecuadas.
-- Para producción, colocar la API detrás de un reverse-proxy (NGINX) con TLS.
-
-Ejemplo rápido: servicios de datos en máquina B (docker-compose minimal para Qdrant):
-
-```yaml
-version: '3.8'
-services:
-  qdrant:
-    image: qdrant/qdrant:latest
-    ports:
-      - "6333:6333"
-    volumes:
-      - qdrant_data:/qdrant/storage
-
-volumes:
-  qdrant_data:
-```
+- No expongas Mongo ni Qdrant directamente a internet.
+- Mantén `JWT_SECRET` fuera del repositorio (secret manager o variable de entorno segura).
+- Protege puertos internos con firewall/VPN.
+- Endpoints `/internal/*` y `/api-docs` deben consumirse desde localhost.

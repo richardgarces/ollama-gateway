@@ -75,8 +75,9 @@ func (h *CommitGenHandler) Staged(w http.ResponseWriter, r *http.Request) {
 
 func (h *CommitGenHandler) writeServiceError(w http.ResponseWriter, err error) {
 	msg := err.Error()
+	lowerMsg := strings.ToLower(msg)
 	switch {
-	case strings.Contains(strings.ToLower(msg), "diff") || strings.Contains(strings.ToLower(msg), "repo") || strings.Contains(strings.ToLower(msg), "path") || strings.Contains(strings.ToLower(msg), "staged") || strings.Contains(strings.ToLower(msg), "timeout"):
+	case strings.Contains(lowerMsg, "diff") || strings.Contains(lowerMsg, "repo") || strings.Contains(lowerMsg, "path") || strings.Contains(lowerMsg, "staged") || strings.Contains(lowerMsg, "timeout"):
 		httputil.WriteError(w, http.StatusBadRequest, msg)
 	default:
 		httputil.WriteError(w, http.StatusInternalServerError, msg)

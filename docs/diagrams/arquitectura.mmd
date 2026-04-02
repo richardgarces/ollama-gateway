@@ -1,0 +1,28 @@
+flowchart LR
+  U[Usuario o VS Code Extension] --> API[API Gateway Go]
+
+  subgraph API[API Gateway - Clean Architecture]
+    Srv[internal/server]
+    Mid[internal/middleware JWT CORS RateLimit Metrics RequestID]
+    H[internal/handlers]
+    Sv[internal/services]
+    D[internal/domain]
+    Obs[internal/observability]
+    Srv --> Mid --> H --> Sv --> D
+    Mid --> Obs
+  end
+
+  H --> RAG[RAGService]
+  Sv --> Idx[IndexerService]
+  Sv --> Agent[AgentService]
+  Sv --> Feat[SQLGen CICD CommitGen Security Session]
+
+  RAG --> Ollama[Ollama API]
+  RAG --> Qd[Qdrant Vector DB]
+  H --> Mongo[(MongoDB opcional perfiles/conversaciones)]
+  Idx --> Repo[(Repositorio de codigo)]
+  Idx --> Qd
+  Idx --> SecHook[Hook Security Scan]
+
+  API --> OpenAI[Endpoints OpenAI compatibles]
+  API --> Int[Endpoints internos localhost Dashboard API Docs Indexer]

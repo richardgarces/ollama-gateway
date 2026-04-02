@@ -1,0 +1,20 @@
+flowchart TD
+  A[Desarrollador] --> B[Usa VS Code Extension o API]
+  B --> C{Necesidad principal}
+
+  C --> C1[Generar y conversar con IA]
+  C --> C2[Responder con contexto del repo]
+  C --> C3[Automatizar tareas de ingenieria]
+  C --> C4[Operar y monitorear plataforma]
+
+  C1 --> V1[Chat y completions privados]
+  C2 --> V2[RAG con embeddings y busqueda vectorial]
+  C3 --> V3[Review DocGen TestGen SQL CI/CD CommitMsg]
+  C4 --> V4[Dashboard API Explorer Indexer Security]
+
+  V1 --> O[Productividad de desarrollo]
+  V2 --> O
+  V3 --> O
+  V4 --> O
+
+  O --> R[Menor tiempo de entrega y mayor calidad]
