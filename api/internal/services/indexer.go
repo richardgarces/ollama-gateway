@@ -42,6 +42,7 @@ type IndexerService struct {
 	ign           *ignorepkg.GitIgnore
 	logger        *slog.Logger
 	onChange      func()
+	onFileIndexed func(path string)
 	analyzer      *ASTAnalyzer
 	reindexing    bool
 	lastReindexAt time.Time
@@ -93,12 +94,27 @@ func (s *IndexerService) SetOnContentChange(fn func()) {
 	s.onChange = fn
 }
 
+func (s *IndexerService) SetOnFileIndexed(fn func(path string)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onFileIndexed = fn
+}
+
 func (s *IndexerService) notifyContentChange() {
 	s.mu.Lock()
 	fn := s.onChange
 	s.mu.Unlock()
 	if fn != nil {
 		fn()
+	}
+}
+
+func (s *IndexerService) notifyFileIndexed(path string) {
+	s.mu.Lock()
+	fn := s.onFileIndexed
+	s.mu.Unlock()
+	if fn != nil {
+		fn(path)
 	}
 }
 
@@ -176,7 +192,15 @@ func shouldIndexFile(path string) bool {
 	return false
 }
 
-func (s *IndexerService) indexFile(path string) error {
+func (s *IndexerService) indexFile(path string) (retErr error) {
+	changed := false
+	defer func() {
+		if changed && retErr == nil {
+			s.notifyContentChange()
+			s.notifyFileIndexed(path)
+		}
+	}()
+
 	f, err := os.Open(path)
 	if err != nil {
 		return err
@@ -186,7 +210,6 @@ func (s *IndexerService) indexFile(path string) error {
 	hasher := sha1.New()
 	if _, err := io.Copy(hasher, f); err == nil {
 		sum := hex.EncodeToString(hasher.Sum(nil))
-		changed := false
 		s.mu.Lock()
 		prev, ok := s.fileHashes[path]
 		if ok && prev == sum {
@@ -196,9 +219,6 @@ func (s *IndexerService) indexFile(path string) error {
 		s.fileHashes[path] = sum
 		changed = true
 		s.mu.Unlock()
-		if changed {
-			s.notifyContentChange()
-		}
 		// rewind
 		if _, err := f.Seek(0, io.SeekStart); err != nil {
 			return err

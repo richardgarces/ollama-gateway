@@ -266,6 +266,43 @@ function targetEditorLanguage(toLang) {
   return v || 'plaintext';
 }
 
+function runGitDiffCached(repoRoot) {
+  return new Promise((resolve, reject) => {
+    const args = ['-C', repoRoot, 'diff', '--cached'];
+    const proc = spawn('git', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+
+    let stdout = '';
+    let stderr = '';
+    proc.stdout.on('data', (d) => { stdout += d.toString(); });
+    proc.stderr.on('data', (d) => { stderr += d.toString(); });
+    proc.on('error', (err) => reject(err));
+    proc.on('close', (code) => {
+      if (code !== 0) {
+        reject(new Error((stderr || ('git diff --cached failed with code ' + code)).trim()));
+        return;
+      }
+      resolve(stdout);
+    });
+  });
+}
+
+async function trySetSCMInput(message) {
+  const msg = String(message || '').trim();
+  if (!msg) return false;
+
+  await vscode.commands.executeCommand('workbench.view.scm');
+  const commands = ['git.setInputBoxValue', 'git.setCommitInput', 'git.setCommitMessage'];
+  for (const id of commands) {
+    try {
+      await vscode.commands.executeCommand(id, msg);
+      return true;
+    } catch {
+      // try next command id
+    }
+  }
+  return false;
+}
+
 // ---------------------------------------------------------------------------
 // Chat Panel (Webview)
 // ---------------------------------------------------------------------------
@@ -376,6 +413,7 @@ function getChatPanelHTML() {
 function activate(context) {
   const output = vscode.window.createOutputChannel('Copilot Local');
   let chatPanel = null;
+  let activeSessionId = '';
 
   // --- Send Selection command (WS first → HTTP SSE fallback → CLI fallback) ---
   context.subscriptions.push(
@@ -427,6 +465,21 @@ function activate(context) {
 
       chatPanel.webview.onDidReceiveMessage((msg) => {
         if (msg.type === 'chat') {
+          if (activeSessionId) {
+            const endpoint = '/api/sessions/' + encodeURIComponent(activeSessionId) + '/chat';
+            postJSON(endpoint, { message: msg.text }).then((res) => {
+              const content = res?.response || '';
+              if (content) {
+                chatPanel?.webview.postMessage({ type: 'chunk', text: content });
+              }
+              chatPanel?.webview.postMessage({ type: 'done' });
+            }).catch((err) => {
+              const text = err instanceof Error ? err.message : String(err);
+              chatPanel?.webview.postMessage({ type: 'error', text });
+            });
+            return;
+          }
+
           streamWS(msg.text,
             (chunk) => chatPanel?.webview.postMessage({ type: 'chunk', text: chunk }),
             (wsErr) => {
@@ -643,6 +696,84 @@ function activate(context) {
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         vscode.window.showErrorMessage('Add tests failed: ' + msg);
+      }
+    }),
+  );
+
+  // Join a shared chat session and connect chat panel to it
+  context.subscriptions.push(
+    vscode.commands.registerCommand('copilot-local.joinSession', async () => {
+      const sessionId = await vscode.window.showInputBox({
+        title: 'Join Shared Session',
+        prompt: 'Ingresa session_id',
+        ignoreFocusOut: true,
+      });
+      if (!sessionId || !sessionId.trim()) {
+        return;
+      }
+
+      const cleanID = sessionId.trim();
+      try {
+        const endpoint = '/api/sessions/' + encodeURIComponent(cleanID) + '/join';
+        await postJSON(endpoint, {});
+        activeSessionId = cleanID;
+
+        await vscode.commands.executeCommand('copilot-local.openChat');
+        if (chatPanel) {
+          chatPanel.webview.postMessage({
+            type: 'externalResult',
+            text: 'Connected to shared session: ' + cleanID,
+          });
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        vscode.window.showErrorMessage('Join session failed: ' + msg);
+      }
+    }),
+  );
+
+  // Generate commit message from local staged diff and place it in SCM input box
+  context.subscriptions.push(
+    vscode.commands.registerCommand('copilot-local.commitMessage', async () => {
+      const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      if (!workspaceFolder) {
+        vscode.window.showErrorMessage('No workspace folder abierto');
+        return;
+      }
+
+      let diff = '';
+      try {
+        diff = await runGitDiffCached(workspaceFolder);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        vscode.window.showErrorMessage('No se pudo leer staged diff: ' + msg);
+        return;
+      }
+
+      if (!diff.trim()) {
+        vscode.window.showInformationMessage('No hay cambios staged para generar commit message');
+        return;
+      }
+
+      try {
+        const result = await postJSON('/api/commit/message', { diff });
+        const message = (result && result.message) ? String(result.message).trim() : '';
+        if (!message) {
+          vscode.window.showErrorMessage('La API no devolvió message');
+          return;
+        }
+
+        const setOk = await trySetSCMInput(message);
+        if (setOk) {
+          vscode.window.showInformationMessage('Commit message sugerido en Source Control');
+          return;
+        }
+
+        await vscode.env.clipboard.writeText(message);
+        vscode.window.showWarningMessage('No se pudo setear el input de Source Control automáticamente. Mensaje copiado al portapapeles.');
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        vscode.window.showErrorMessage('Commit message generation failed: ' + msg);
       }
     }),
   );

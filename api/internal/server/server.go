@@ -27,6 +27,68 @@ type Server struct {
 	profileService      *services.ProfileService
 }
 
+type RouteDefinition = domain.RouteDefinition
+
+func GetRouteDefinitions() []RouteDefinition {
+	return []RouteDefinition{
+		{Method: "GET", Path: "/health", Description: "Liveness probe", ExampleBody: "", Protected: false},
+		{Method: "GET", Path: "/health/liveness", Description: "Liveness detail", ExampleBody: "", Protected: false},
+		{Method: "GET", Path: "/health/readiness", Description: "Readiness probe", ExampleBody: "", Protected: false},
+		{Method: "GET", Path: "/metrics", Description: "Metricas JSON internas", ExampleBody: "", Protected: false},
+		{Method: "GET", Path: "/metrics/prometheus", Description: "Metricas Prometheus", ExampleBody: "", Protected: false},
+		{Method: "POST", Path: "/login", Description: "Autenticacion JWT", ExampleBody: "{\n  \"username\": \"admin\",\n  \"password\": \"admin\"\n}", Protected: false},
+		{Method: "GET", Path: "/dashboard", Description: "Dashboard de monitoreo", ExampleBody: "", Protected: false, LocalhostOnly: true},
+		{Method: "GET", Path: "/internal/dashboard/status", Description: "Estado de dashboard", ExampleBody: "", Protected: false, LocalhostOnly: true},
+		{Method: "GET", Path: "/internal/logs/stream", Description: "Stream SSE de logs", ExampleBody: "", Protected: false, LocalhostOnly: true, SSE: true},
+		{Method: "GET", Path: "/internal/index/status", Description: "Estado del indexer", ExampleBody: "", Protected: false, LocalhostOnly: true},
+		{Method: "POST", Path: "/internal/index/reindex", Description: "Reindexar repositorio", ExampleBody: "{}", Protected: false, LocalhostOnly: true},
+		{Method: "POST", Path: "/internal/index/start", Description: "Iniciar watcher de indexer", ExampleBody: "{}", Protected: false, LocalhostOnly: true},
+		{Method: "POST", Path: "/internal/index/stop", Description: "Detener watcher de indexer", ExampleBody: "{}", Protected: false, LocalhostOnly: true},
+		{Method: "POST", Path: "/internal/index/reset", Description: "Resetear estado indexer", ExampleBody: "{}", Protected: false, LocalhostOnly: true},
+		{Method: "GET", Path: "/api-docs", Description: "SPA API Explorer embebido", ExampleBody: "", Protected: false, LocalhostOnly: true},
+		{Method: "GET", Path: "/internal/api-docs/routes", Description: "Definiciones de rutas para API explorer", ExampleBody: "", Protected: false, LocalhostOnly: true},
+		{Method: "POST", Path: "/api/search", Description: "Busqueda semantica", ExampleBody: "{\n  \"query\": \"auth middleware\",\n  \"top_k\": 5\n}", Protected: false},
+		{Method: "POST", Path: "/openai/v1/embeddings", Description: "OpenAI compatible embeddings", ExampleBody: "{\n  \"model\": \"nomic-embed-text\",\n  \"input\": \"hola\"\n}", Protected: false},
+		{Method: "POST", Path: "/openai/v1/completions", Description: "OpenAI compatible completions", ExampleBody: "{\n  \"model\": \"llama3\",\n  \"prompt\": \"Hello\"\n}", Protected: false},
+		{Method: "POST", Path: "/openai/v1/chat/completions", Description: "OpenAI compatible chat completions", ExampleBody: "{\n  \"model\": \"llama3\",\n  \"messages\": [{\"role\":\"user\",\"content\":\"hola\"}]\n}", Protected: false},
+		{Method: "GET", Path: "/ws/chat", Description: "WebSocket chat", ExampleBody: "", Protected: false},
+		{Method: "POST", Path: "/api/generate", Description: "Generacion simple", ExampleBody: "{\n  \"prompt\": \"Resume este texto\",\n  \"stream\": false\n}", Protected: true},
+		{Method: "POST", Path: "/api/agent", Description: "Ejecucion de agente", ExampleBody: "{\n  \"input\": \"Analiza el repo\"\n}", Protected: true},
+		{Method: "POST", Path: "/api/refactor", Description: "Refactor de archivo", ExampleBody: "{\n  \"path\": \"api/internal/server/server.go\",\n  \"prompt\": \"extrae helper\"\n}", Protected: true},
+		{Method: "GET", Path: "/api/analyze-repo", Description: "Analisis de repositorio", ExampleBody: "", Protected: true},
+		{Method: "POST", Path: "/api/review/diff", Description: "Code review de diff", ExampleBody: "{\n  \"diff\": \"diff --git ...\"\n}", Protected: true},
+		{Method: "POST", Path: "/api/review/file", Description: "Code review de archivo", ExampleBody: "{\n  \"path\": \"api/internal/handlers/chat.go\"\n}", Protected: true},
+		{Method: "POST", Path: "/api/docs/file", Description: "Generar docs para archivo", ExampleBody: "{\n  \"path\": \"api/internal/services/repo.go\",\n  \"apply\": false\n}", Protected: true},
+		{Method: "POST", Path: "/api/docs/readme", Description: "Generar README", ExampleBody: "{\n  \"apply\": false\n}", Protected: true},
+		{Method: "POST", Path: "/api/debug/error", Description: "Analizar stack trace", ExampleBody: "{\n  \"stack_trace\": \"panic: ...\"\n}", Protected: true},
+		{Method: "POST", Path: "/api/debug/log", Description: "Analizar logs", ExampleBody: "{\n  \"log\": \"error line\",\n  \"lines\": 200\n}", Protected: true},
+		{Method: "POST", Path: "/api/translate", Description: "Traducir codigo", ExampleBody: "{\n  \"code\": \"print('hi')\",\n  \"from\": \"python\",\n  \"to\": \"go\"\n}", Protected: true},
+		{Method: "POST", Path: "/api/translate/file", Description: "Traducir archivo", ExampleBody: "{\n  \"path\": \"api/internal/domain/models.go\",\n  \"to\": \"typescript\"\n}", Protected: true},
+		{Method: "POST", Path: "/api/testgen", Description: "Generar tests desde codigo", ExampleBody: "{\n  \"lang\": \"go\",\n  \"code\": \"func Add(a,b int) int { return a+b }\"\n}", Protected: true},
+		{Method: "POST", Path: "/api/testgen/file", Description: "Generar tests para archivo", ExampleBody: "{\n  \"path\": \"api/internal/services/repo.go\",\n  \"apply\": false\n}", Protected: true},
+		{Method: "POST", Path: "/api/sql/query", Description: "Generar query SQL", ExampleBody: "{\n  \"description\": \"listar usuarios activos\",\n  \"dialect\": \"postgres\"\n}", Protected: true},
+		{Method: "POST", Path: "/api/sql/migration", Description: "Generar migracion SQL", ExampleBody: "{\n  \"description\": \"crear tabla sessions\",\n  \"dialect\": \"postgres\"\n}", Protected: true},
+		{Method: "POST", Path: "/api/sql/explain", Description: "Explicar query SQL", ExampleBody: "{\n  \"sql\": \"SELECT * FROM users WHERE id = 1\"\n}", Protected: true},
+		{Method: "POST", Path: "/api/cicd/generate", Description: "Generar pipeline CI/CD", ExampleBody: "{\n  \"platform\": \"github-actions\",\n  \"apply\": false\n}", Protected: true},
+		{Method: "POST", Path: "/api/cicd/optimize", Description: "Optimizar pipeline CI/CD", ExampleBody: "{\n  \"platform\": \"gitlab-ci\",\n  \"pipeline\": \"stages: [test]\"\n}", Protected: true},
+		{Method: "POST", Path: "/api/commit/message", Description: "Generar commit message desde diff", ExampleBody: "{\n  \"diff\": \"diff --git ...\"\n}", Protected: true},
+		{Method: "POST", Path: "/api/commit/staged", Description: "Generar commit message desde staged", ExampleBody: "{\n  \"repo_root\": \".\"\n}", Protected: true},
+		{Method: "GET", Path: "/api/architect/analyze", Description: "Analisis de arquitectura", ExampleBody: "", Protected: true},
+		{Method: "POST", Path: "/api/architect/refactor", Description: "Sugerencia de refactor", ExampleBody: "{\n  \"path\": \"api/internal/services/router.go\"\n}", Protected: true},
+		{Method: "POST", Path: "/api/sessions", Description: "Crear sesion compartida", ExampleBody: "{}", Protected: true},
+		{Method: "POST", Path: "/api/sessions/{id}/join", Description: "Unirse a sesion", ExampleBody: "{}", Protected: true},
+		{Method: "GET", Path: "/api/sessions/{id}/messages", Description: "Obtener mensajes de sesion", ExampleBody: "", Protected: true},
+		{Method: "POST", Path: "/api/sessions/{id}/chat", Description: "Enviar chat a sesion", ExampleBody: "{\n  \"message\": \"hola equipo\"\n}", Protected: true},
+		{Method: "POST", Path: "/api/security/scan/file", Description: "Escanear seguridad de archivo", ExampleBody: "{\n  \"path\": \"api/internal/server/server.go\"\n}", Protected: true},
+		{Method: "POST", Path: "/api/security/scan/repo", Description: "Escanear seguridad del repo", ExampleBody: "{}", Protected: true},
+		{Method: "POST", Path: "/api/v1/chat/completions", Description: "Chat completions interno", ExampleBody: "{\n  \"model\": \"llama3\",\n  \"messages\": [{\"role\":\"user\",\"content\":\"hola\"}]\n}", Protected: true},
+		{Method: "GET", Path: "/api/profile", Description: "Obtener perfil", ExampleBody: "", Protected: true},
+		{Method: "PUT", Path: "/api/profile", Description: "Actualizar perfil", ExampleBody: "{\n  \"default_model\": \"llama3\"\n}", Protected: true},
+		{Method: "POST", Path: "/api/patch", Description: "Aplicar patch generado", ExampleBody: "{\n  \"response\": \"*** Begin Patch ...\",\n  \"apply\": true\n}", Protected: true},
+		{Method: "GET", Path: "/api/patch/preview", Description: "Previsualizar patch", ExampleBody: "", Protected: true},
+	}
+}
+
 func New(cfg *config.Config, cacheBackend cache.Cache) *Server {
 	s := &Server{
 		cfg:   cfg,
@@ -89,8 +151,33 @@ func (s *Server) setupRoutes() {
 	debugService := services.NewDebugService(ragService, s.cfg.RepoRoot, logger)
 	translatorService := services.NewTranslatorService(ragService, s.cfg.RepoRoot, logger)
 	testGenService := services.NewTestGenService(ragService, s.cfg.RepoRoot, logger)
+	sqlGenService := services.NewSQLGenService(ragService, s.cfg.RepoRoot, logger)
+	cicdService := services.NewCICDService(ragService, s.cfg.RepoRoot, logger)
+	commitGenService := services.NewCommitGenService(ragService, s.cfg.RepoRoot, logger)
+	sessionService := services.NewSessionService()
+	securityService := services.NewSecurityService(ragService, s.cfg.RepoRoot, logger)
 	indexerService, _ := services.NewIndexerService(repoRoots, s.cfg.IndexerStatePath, ollamaService, qdrantService, logger)
 	indexerService.SetOnContentChange(ragService.InvalidateResponseCache)
+	indexerService.SetOnFileIndexed(func(path string) {
+		go func(filePath string) {
+			findings, err := securityService.ScanFile(filePath)
+			if err != nil {
+				logger.Debug("security scan en indexer falló", slog.String("path", filePath), slog.String("error", err.Error()))
+				return
+			}
+			for _, finding := range findings {
+				if services.IsHighSeverity(finding.Severity) {
+					logger.Warn("security finding detectado",
+						slog.String("path", finding.Path),
+						slog.String("severity", finding.Severity),
+						slog.String("category", finding.Category),
+						slog.Int("line", finding.Line),
+						slog.String("description", finding.Description),
+					)
+				}
+			}
+		}(path)
+	})
 	architectService := services.NewArchitectService(ragService, s.cfg.RepoRoot, indexerService, logger)
 
 	var ollamaClient domain.OllamaClient = ollamaService
@@ -111,6 +198,11 @@ func (s *Server) setupRoutes() {
 	debugHandler := handlers.NewDebugHandler(debugService)
 	translatorHandler := handlers.NewTranslatorHandler(translatorService)
 	testGenHandler := handlers.NewTestGenHandler(testGenService)
+	sqlGenHandler := handlers.NewSQLGenHandler(sqlGenService)
+	cicdHandler := handlers.NewCICDHandler(cicdService)
+	commitGenHandler := handlers.NewCommitGenHandler(commitGenService)
+	sessionHandler := handlers.NewSessionHandler(sessionService, ragEngine)
+	securityHandler := handlers.NewSecurityHandler(securityService)
 	architectHandler := handlers.NewArchitectHandler(architectService)
 	profileHandler := handlers.NewProfileHandler(s.profileService)
 	patchHandler := handlers.NewPatchHandler(s.cfg.RepoRoot, patchService)
@@ -120,6 +212,7 @@ func (s *Server) setupRoutes() {
 	searchHandler := handlers.NewSearchHandler(ollamaClient, vectorStore, repoRoots)
 	openaiHandler := handlers.NewOpenAIHandler(ollamaClient, ragEngine, s.conversationService, s.profileService)
 	wsHandler := handlers.NewWSHandler(ragEngine, s.cfg.JWTSecret)
+	apiExplorerHandler := handlers.NewAPIExplorerHandler(GetRouteDefinitions())
 	healthHandler := handlers.NewHealthHandler(s.cfg)
 	authMiddleware := middleware.NewAuthMiddleware(s.cfg.JWTSecret)
 	localhostOnly := middleware.LocalhostOnly
@@ -137,8 +230,10 @@ func (s *Server) setupRoutes() {
 
 	// Dashboard interno (solo localhost)
 	mux.Handle("GET /dashboard", localhostOnly(http.HandlerFunc(dashboardHandler.Handle)))
+	mux.Handle("GET /api-docs", localhostOnly(http.HandlerFunc(apiExplorerHandler.Handle)))
 	mux.Handle("GET /internal/dashboard/status", localhostOnly(http.HandlerFunc(dashboardHandler.Status)))
 	mux.Handle("GET /internal/logs/stream", localhostOnly(http.HandlerFunc(dashboardHandler.LogsStream)))
+	mux.Handle("GET /internal/api-docs/routes", localhostOnly(http.HandlerFunc(apiExplorerHandler.Routes)))
 
 	// Indexer control (internal, solo localhost)
 	mux.Handle("GET /internal/index/status", localhostOnly(http.HandlerFunc(indexerHandler.Status)))
@@ -168,8 +263,21 @@ func (s *Server) setupRoutes() {
 	mux.Handle("POST /api/translate/file", authMiddleware.JWT(http.HandlerFunc(translatorHandler.TranslateFile)))
 	mux.Handle("POST /api/testgen", authMiddleware.JWT(http.HandlerFunc(testGenHandler.Generate)))
 	mux.Handle("POST /api/testgen/file", authMiddleware.JWT(http.HandlerFunc(testGenHandler.GenerateForFile)))
+	mux.Handle("POST /api/sql/query", authMiddleware.JWT(http.HandlerFunc(sqlGenHandler.GenerateQuery)))
+	mux.Handle("POST /api/sql/migration", authMiddleware.JWT(http.HandlerFunc(sqlGenHandler.GenerateMigration)))
+	mux.Handle("POST /api/sql/explain", authMiddleware.JWT(http.HandlerFunc(sqlGenHandler.ExplainQuery)))
+	mux.Handle("POST /api/cicd/generate", authMiddleware.JWT(http.HandlerFunc(cicdHandler.GeneratePipeline)))
+	mux.Handle("POST /api/cicd/optimize", authMiddleware.JWT(http.HandlerFunc(cicdHandler.OptimizePipeline)))
+	mux.Handle("POST /api/commit/message", authMiddleware.JWT(http.HandlerFunc(commitGenHandler.Message)))
+	mux.Handle("POST /api/commit/staged", authMiddleware.JWT(http.HandlerFunc(commitGenHandler.Staged)))
 	mux.Handle("GET /api/architect/analyze", authMiddleware.JWT(http.HandlerFunc(architectHandler.AnalyzeProject)))
 	mux.Handle("POST /api/architect/refactor", authMiddleware.JWT(http.HandlerFunc(architectHandler.SuggestRefactor)))
+	mux.Handle("POST /api/sessions", authMiddleware.JWT(http.HandlerFunc(sessionHandler.Create)))
+	mux.Handle("POST /api/sessions/{id}/join", authMiddleware.JWT(http.HandlerFunc(sessionHandler.Join)))
+	mux.Handle("GET /api/sessions/{id}/messages", authMiddleware.JWT(http.HandlerFunc(sessionHandler.GetMessages)))
+	mux.Handle("POST /api/sessions/{id}/chat", authMiddleware.JWT(http.HandlerFunc(sessionHandler.Chat)))
+	mux.Handle("POST /api/security/scan/file", authMiddleware.JWT(http.HandlerFunc(securityHandler.ScanFile)))
+	mux.Handle("POST /api/security/scan/repo", authMiddleware.JWT(http.HandlerFunc(securityHandler.ScanRepo)))
 	mux.Handle("POST /api/v1/chat/completions", authMiddleware.JWT(http.HandlerFunc(chatHandler.Handle)))
 	mux.Handle("GET /api/profile", authMiddleware.JWT(http.HandlerFunc(profileHandler.Get)))
 	mux.Handle("PUT /api/profile", authMiddleware.JWT(http.HandlerFunc(profileHandler.Put)))

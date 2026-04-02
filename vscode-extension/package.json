@@ -11,7 +11,9 @@
     "onCommand:copilot-local.openChat",
     "onCommand:copilot-local.debugError",
     "onCommand:copilot-local.translateSelection",
-    "onCommand:copilot-local.addTests"
+    "onCommand:copilot-local.addTests",
+    "onCommand:copilot-local.joinSession",
+    "onCommand:copilot-local.commitMessage"
   ],
   "main": "extension.js",
   "contributes": {
@@ -35,6 +37,14 @@
       {
         "command": "copilot-local.addTests",
         "title": "Copilot Local: Add Tests"
+      },
+      {
+        "command": "copilot-local.joinSession",
+        "title": "Copilot Local: Join Shared Session"
+      },
+      {
+        "command": "copilot-local.commitMessage",
+        "title": "Copilot Local: Suggest Commit Message"
       }
     ],
     "keybindings": [
