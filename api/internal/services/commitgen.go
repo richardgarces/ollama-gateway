@@ -19,11 +19,6 @@ type CommitGenService struct {
 	logger   *slog.Logger
 }
 
-const (
-	commitGenMaxDiffChars = 120000
-	commitGenGitTimeout   = 5 * time.Second
-)
-
 func NewCommitGenService(rag domain.RAGEngine, repoRoot string, logger *slog.Logger) *CommitGenService {
 	if logger == nil {
 		logger = slog.Default()
@@ -37,8 +32,8 @@ func (s *CommitGenService) GenerateMessage(diff string) (string, error) {
 		return "", fmt.Errorf("diff requerido")
 	}
 
-	if len(diff) > commitGenMaxDiffChars {
-		diff = diff[:commitGenMaxDiffChars]
+	if len(diff) > 120000 {
+		diff = diff[:120000]
 	}
 
 	prompt := strings.Join([]string{
@@ -69,12 +64,22 @@ func (s *CommitGenService) GenerateFromStaged(repoRoot string) (string, error) {
 		return "", err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), commitGenGitTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	out, err := runGitDiffCached(ctx, rootAbs)
+	cmd := exec.CommandContext(ctx, "git", "-C", rootAbs, "diff", "--cached")
+	out, err := cmd.Output()
 	if err != nil {
-		return "", err
+		if ctx.Err() == context.DeadlineExceeded {
+			return "", fmt.Errorf("timeout ejecutando git diff --cached")
+		}
+		if ee, ok := err.(*exec.ExitError); ok {
+			stderr := strings.TrimSpace(string(ee.Stderr))
+			if stderr != "" {
+				return "", fmt.Errorf("git diff --cached falló: %s", stderr)
+			}
+		}
+		return "", fmt.Errorf("git diff --cached falló")
 	}
 
 	diff := strings.TrimSpace(string(out))
@@ -83,23 +88,6 @@ func (s *CommitGenService) GenerateFromStaged(repoRoot string) (string, error) {
 	}
 
 	return s.GenerateMessage(diff)
-}
-
-func runGitDiffCached(ctx context.Context, rootAbs string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, "git", "-C", rootAbs, "diff", "--cached")
-	out, err := cmd.CombinedOutput()
-	if err == nil {
-		return out, nil
-	}
-
-	if ctx.Err() == context.DeadlineExceeded {
-		return nil, fmt.Errorf("timeout ejecutando git diff --cached")
-	}
-	stderr := strings.TrimSpace(string(out))
-	if stderr != "" {
-		return nil, fmt.Errorf("git diff --cached falló: %s", stderr)
-	}
-	return nil, fmt.Errorf("git diff --cached falló")
 }
 
 func (s *CommitGenService) resolveRepoRoot(input string) (string, error) {
