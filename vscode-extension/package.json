@@ -1,0 +1,64 @@
+{
+  "name": "copilot-local",
+  "displayName": "Copilot Local",
+  "description": "Local Copilot extension with HTTP SSE streaming and chat panel",
+  "version": "0.1.0",
+  "engines": {
+    "vscode": "^1.60.0"
+  },
+  "activationEvents": [
+    "onCommand:copilot-local.sendSelection",
+    "onCommand:copilot-local.openChat"
+  ],
+  "main": "extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "copilot-local.sendSelection",
+        "title": "Copilot Local: Send Selection"
+      },
+      {
+        "command": "copilot-local.openChat",
+        "title": "Copilot Local: Open Chat Panel"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "copilot-local.sendSelection",
+        "key": "ctrl+shift+l",
+        "mac": "cmd+shift+l",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "copilot-local.openChat",
+        "key": "ctrl+shift+k",
+        "mac": "cmd+shift+k"
+      }
+    ],
+    "configuration": {
+      "title": "Copilot Local",
+      "properties": {
+        "copilotLocal.apiUrl": {
+          "type": "string",
+          "default": "http://localhost:8081",
+          "description": "Base URL of the local gateway (e.g. http://localhost:8081)"
+        },
+        "copilotLocal.model": {
+          "type": "string",
+          "default": "local-rag",
+          "description": "Default model to request"
+        },
+        "copilotLocal.cliPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to copilot-cli binary (fallback when HTTP is unavailable)"
+        },
+        "copilotLocal.jwtToken": {
+          "type": "string",
+          "default": "",
+          "description": "JWT token for authenticated endpoints (optional)"
+        }
+      }
+    }
+  }
+}

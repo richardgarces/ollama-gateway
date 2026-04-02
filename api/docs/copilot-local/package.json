@@ -1,0 +1,36 @@
+{
+  "name": "copilot-local",
+  "displayName": "Copilot Local",
+  "description": "Minimal VS Code extension to send selection to the local Copilot CLI",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.60.0"
+  },
+  "activationEvents": [
+    "onCommand:copilot-local.sendSelection"
+  ],
+  "main": "extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "copilot-local.sendSelection",
+        "title": "Copilot: Send Selection"
+      }
+    ],
+    "configuration": {
+      "title": "Copilot Local",
+      "properties": {
+        "copilotLocal.cliPath": {
+          "type": "string",
+          "default": "${workspaceFolder}/api/bin/copilot-cli",
+          "description": "Path to the copilot-cli binary"
+        },
+        "copilotLocal.model": {
+          "type": "string",
+          "default": "local-rag",
+          "description": "Default model to request"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,101 @@
+package server
+
+import (
+	"context"
+	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"ollama-gateway/internal/config"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+}	return nil	log.Println("Servidor apagado correctamente")	}		return err	if err := srv.Shutdown(ctx); err != nil {	defer cancel()	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)	log.Println("Apagando servidor...")	<-quit	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)	quit := make(chan os.Signal, 1)	}()		}			log.Fatal("error arrancando servidor:", err)		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {		log.Printf("SaaS API en ejecución en el puerto :%s...\n", s.cfg.Port)	go func() {	}		IdleTimeout:  60 * time.Second,		WriteTimeout: 120 * time.Second,		ReadTimeout:  15 * time.Second,		Handler:      s.router,		Addr:         ":" + s.cfg.Port,	srv := &http.Server{func (s *Server) Start() error {}	api.HandleFunc("/v1/chat/completions", chatHandler.Handle).Methods("POST")	api.HandleFunc("/analyze-repo", repoHandler.Analyze).Methods("GET")	api.HandleFunc("/refactor", repoHandler.Refactor).Methods("POST")	api.HandleFunc("/agent", agentHandler.Handle).Methods("POST")	api.HandleFunc("/generate", generateHandler.Handle).Methods("POST")	api.Use(authMiddleware.JWT)	api := s.router.PathPrefix("/api").Subrouter()	authMiddleware := middleware.NewAuthMiddleware(s.cfg.JWTSecret)	// Rutas protegidas con JWT	s.router.HandleFunc("/login", authHandler.Login).Methods("POST")	s.router.HandleFunc("/health", handlers.Health).Methods("GET")	// Rutas públicas	s.router.Use(middleware.CORS)	s.router.Use(middleware.Logging)	// Middleware global	repoHandler := handlers.NewRepoHandler(repoService)	chatHandler := handlers.NewChatHandler(ragService)	agentHandler := handlers.NewAgentHandler(agentService)	generateHandler := handlers.NewGenerateHandler(ragService)	authHandler := handlers.NewAuthHandler(s.cfg.JWTSecret)	// Inicializar handlers	repoService := services.NewRepoService(ollamaService, s.cfg.RepoRoot)	agentService := services.NewAgentService(ollamaService, s.cfg.RepoRoot)	ragService := services.NewRAGService(ollamaService, routerService, s.cfg.QdrantURL)	routerService := services.NewRouterService()	ollamaService := services.NewOllamaService(s.cfg.OllamaURL)	// Inicializar servicios con inyección de dependenciasfunc (s *Server) setupRoutes() {}	return s	s.setupRoutes()	}		router: mux.NewRouter(),		cfg:    cfg,	s := &Server{func New(cfg *config.Config) *Server {}	router *mux.Router	cfg    *config.Configtype Server struct {)	"github.com/gorilla/mux"	"ollama-gateway/internal/services"	"ollama-gateway/internal/middleware"	"ollama-gateway/internal/handlers"

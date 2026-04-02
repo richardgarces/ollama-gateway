@@ -1,0 +1,38 @@
+# Ollama Local AI SaaS Setup
+
+## Requisitos
+- Docker
+- Docker Compose
+
+## 1. Clonar o copiar este proyecto
+```bash
+cd ollama_saas_project
+```
+
+## 2. Levantar todo
+```bash
+docker compose up -d --build
+```
+
+## 3. Verificar servicios
+```bash
+docker ps
+```
+
+## 4. Probar API
+```bash
+curl http://localhost:8081/health
+```
+
+## 5. Acceder UI
+http://localhost:3000
+
+## 6. Probar Ollama
+```bash
+curl http://localhost:11434/api/tags
+```
+
+## 7. Detener
+```bash
+docker compose down
+```
