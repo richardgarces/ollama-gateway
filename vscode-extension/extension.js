@@ -74,6 +74,106 @@ function streamHTTP(prompt, onChunk, onDone, abortCtl) {
 }
 
 /**
+ * Stream a chat completion via WebSocket.
+ * Server must authenticate using ?token=<jwt>.
+ * @param {string} prompt
+ * @param {(chunk: string) => void} onChunk
+ * @param {(err?: Error) => void} onDone
+ * @param {AbortController} [abortCtl]
+ */
+function streamWS(prompt, onChunk, onDone, abortCtl) {
+  const WS = globalThis.WebSocket;
+  if (typeof WS !== 'function') {
+    onDone(new Error('WebSocket no disponible en runtime de la extension'));
+    return;
+  }
+
+  const { apiUrl, model, jwtToken } = getConfig();
+  if (!jwtToken) {
+    onDone(new Error('JWT token requerido para WebSocket'));
+    return;
+  }
+
+  const wsBase = apiUrl.replace(/^http:/i, 'ws:').replace(/^https:/i, 'wss:');
+  const url = new URL(wsBase + '/ws/chat');
+  url.searchParams.set('token', jwtToken);
+
+  let done = false;
+  const finish = (err) => {
+    if (done) return;
+    done = true;
+    onDone(err);
+  };
+
+  let ws;
+  try {
+    ws = new WS(url.toString());
+  } catch (e) {
+    finish(e instanceof Error ? e : new Error(String(e)));
+    return;
+  }
+
+  ws.onopen = () => {
+    ws.send(JSON.stringify({
+      model,
+      messages: [{ role: 'user', content: prompt }],
+      stream: true,
+    }));
+  };
+
+  ws.onmessage = (event) => {
+    const raw = typeof event.data === 'string' ? event.data : event.data?.toString?.();
+    if (!raw) return;
+    let msg;
+    try {
+      msg = JSON.parse(raw);
+    } catch {
+      return;
+    }
+
+    if (msg.type === 'chunk' && msg.content) {
+      onChunk(msg.content);
+      return;
+    }
+    if (msg.type === 'message' && msg.content) {
+      onChunk(msg.content);
+      return;
+    }
+    if (msg.type === 'error') {
+      finish(new Error(msg.error || 'WebSocket stream error'));
+      try { ws.close(); } catch {}
+      return;
+    }
+    if (msg.type === 'done' || msg.type === 'canceled') {
+      finish();
+      try { ws.close(); } catch {}
+    }
+  };
+
+  ws.onerror = () => {
+    finish(new Error('WebSocket connection failed'));
+  };
+
+  ws.onclose = (event) => {
+    if (!done) {
+      finish(new Error(event?.reason || 'WebSocket closed before completion'));
+    }
+  };
+
+  if (abortCtl) {
+    abortCtl.signal.addEventListener('abort', () => {
+      try {
+        ws.send(JSON.stringify({ type: 'cancel' }));
+      } catch {}
+      try {
+        ws.close();
+      } catch {}
+      finish(new Error('aborted'));
+    });
+  }
+}
+
+/**
  * Fallback: invoke copilot-cli binary via spawn.
  */
 function streamCLI(prompt, onChunk, onDone) {
@@ -200,7 +300,7 @@ function activate(context) {
   const output = vscode.window.createOutputChannel('Copilot Local');
   let chatPanel = null;
 
-  // --- Send Selection command (streams to output channel, HTTP first → CLI fallback) ---
+  // --- Send Selection command (WS first → HTTP SSE fallback → CLI fallback) ---
   context.subscriptions.push(
     vscode.commands.registerCommand('copilot-local.sendSelection', async () => {
       const editor = vscode.window.activeTextEditor;
@@ -217,14 +317,20 @@ function activate(context) {
         output.appendLine('\n--- Done ---');
       };
 
-      // Try HTTP first
-      streamHTTP(text, (chunk) => output.append(chunk), (err) => {
-        if (err) {
-          output.appendLine('[HTTP failed, falling back to CLI] ' + err.message);
-          streamCLI(text, (c) => output.append(c), done);
-        } else {
+      streamWS(text, (chunk) => output.append(chunk), (wsErr) => {
+        if (!wsErr) {
           done();
+          return;
         }
+        output.appendLine('[WS failed, falling back to HTTP SSE] ' + wsErr.message);
+        streamHTTP(text, (chunk) => output.append(chunk), (httpErr) => {
+          if (httpErr) {
+            output.appendLine('[HTTP failed, falling back to CLI] ' + httpErr.message);
+            streamCLI(text, (c) => output.append(c), done);
+            return;
+          }
+          done();
+        });
       });
     }),
   );
@@ -244,23 +350,31 @@ function activate(context) {
 
       chatPanel.webview.onDidReceiveMessage((msg) => {
         if (msg.type === 'chat') {
-          streamHTTP(
-            msg.text,
+          streamWS(msg.text,
             (chunk) => chatPanel?.webview.postMessage({ type: 'chunk', text: chunk }),
-            (err) => {
-              if (err) {
-                // fallback to CLI
-                streamCLI(
-                  msg.text,
-                  (c) => chatPanel?.webview.postMessage({ type: 'chunk', text: c }),
-                  (e) => {
-                    if (e) chatPanel?.webview.postMessage({ type: 'error', text: e.message });
-                    else chatPanel?.webview.postMessage({ type: 'done' });
-                  },
-                );
-              } else {
+            (wsErr) => {
+              if (!wsErr) {
                 chatPanel?.webview.postMessage({ type: 'done' });
+                return;
               }
+              streamHTTP(
+                msg.text,
+                (chunk) => chatPanel?.webview.postMessage({ type: 'chunk', text: chunk }),
+                (httpErr) => {
+                  if (httpErr) {
+                    streamCLI(
+                      msg.text,
+                      (c) => chatPanel?.webview.postMessage({ type: 'chunk', text: c }),
+                      (e) => {
+                        if (e) chatPanel?.webview.postMessage({ type: 'error', text: e.message });
+                        else chatPanel?.webview.postMessage({ type: 'done' });
+                      },
+                    );
+                    return;
+                  }
+                  chatPanel?.webview.postMessage({ type: 'done' });
+                },
+              );
             },
           );
         }

@@ -33,7 +33,8 @@ func (h *GenerateHandler) Handle(w http.ResponseWriter, r *http.Request) {
 			httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		if err := h.ragService.StreamGenerateWithContext(req.Prompt, func(chunk string) error {
+		prompt := withRequestIDPrompt(r, req.Prompt)
+		if err := h.ragService.StreamGenerateWithContext(prompt, func(chunk string) error {
 			return httputil.WriteSSEData(w, map[string]string{"result": chunk})
 		}); err != nil {
 			return
@@ -42,7 +43,8 @@ func (h *GenerateHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.ragService.GenerateWithContext(req.Prompt)
+	prompt := withRequestIDPrompt(r, req.Prompt)
+	result, err := h.ragService.GenerateWithContext(prompt)
 	if err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 		return

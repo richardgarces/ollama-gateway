@@ -14,6 +14,7 @@ import (
 	"sync"
 
 	"ollama-gateway/internal/domain"
+	"ollama-gateway/pkg/reposcope"
 
 	"github.com/fsnotify/fsnotify"
 	ignorepkg "github.com/sabhiram/go-gitignore"
@@ -22,7 +23,8 @@ import (
 // IndexerService indexes files under a repo, computes embeddings via OllamaService
 // and upserts them to Qdrant if configured.
 type IndexerService struct {
-	repoRoot string
+	repoRoot  string
+	repoRoots []string
 	// path to state file (configurable)
 	statePath string
 	ollama    *OllamaService
@@ -36,22 +38,30 @@ type IndexerService struct {
 	// fileHashes stores last seen hash to skip unchanged files (in-memory)
 	fileHashes map[string]string
 	// gitignore matcher
-	ign    *ignorepkg.GitIgnore
-	logger *slog.Logger
+	ign      *ignorepkg.GitIgnore
+	logger   *slog.Logger
+	onChange func()
+	analyzer *ASTAnalyzer
 }
 
 var _ domain.Indexer = (*IndexerService)(nil)
 
-func NewIndexerService(repoRoot string, statePath string, ollama *OllamaService, qdrant *QdrantService, logger *slog.Logger) (*IndexerService, error) {
+func NewIndexerService(repoRoots []string, statePath string, ollama *OllamaService, qdrant *QdrantService, logger *slog.Logger) (*IndexerService, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	roots := reposcope.CanonicalizeRoots(repoRoots)
+	if len(roots) == 0 {
+		roots = []string{"."}
+	}
+	primaryRoot := roots[0]
 	w, err := fsnotify.NewWatcher()
 	if err != nil {
 		return nil, err
 	}
 	s := &IndexerService{
-		repoRoot:   repoRoot,
+		repoRoot:   primaryRoot,
+		repoRoots:  roots,
 		statePath:  statePath,
 		ollama:     ollama,
 		qdrant:     qdrant,
@@ -59,9 +69,10 @@ func NewIndexerService(repoRoot string, statePath string, ollama *OllamaService,
 		stop:       make(chan struct{}),
 		fileHashes: make(map[string]string),
 		logger:     logger,
+		analyzer:   NewASTAnalyzer(roots),
 	}
 	// try load .gitignore
-	gi := filepath.Join(repoRoot, ".gitignore")
+	gi := filepath.Join(primaryRoot, ".gitignore")
 	if _, err := os.Stat(gi); err == nil {
 		ign, err := ignorepkg.CompileIgnoreFile(gi)
 		if err == nil {
@@ -73,36 +84,52 @@ func NewIndexerService(repoRoot string, statePath string, ollama *OllamaService,
 	return s, nil
 }
 
+func (s *IndexerService) SetOnContentChange(fn func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onChange = fn
+}
+
+func (s *IndexerService) notifyContentChange() {
+	s.mu.Lock()
+	fn := s.onChange
+	s.mu.Unlock()
+	if fn != nil {
+		fn()
+	}
+}
+
 // IndexRepo walks the repoRoot and indexes supported files.
 func (s *IndexerService) IndexRepo() error {
-	files := []string{}
-	err := filepath.Walk(s.repoRoot, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return nil
-		}
-		if info.IsDir() {
-			// skip .git and node_modules
-			base := info.Name()
-			if base == ".git" || base == "node_modules" || base == "vendor" {
-				return filepath.SkipDir
+	for _, repoRoot := range s.repoRoots {
+		files := []string{}
+		err := filepath.Walk(repoRoot, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return nil
+			}
+			if info.IsDir() {
+				base := info.Name()
+				if base == ".git" || base == "node_modules" || base == "vendor" {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			rel, _ := filepath.Rel(repoRoot, path)
+			if s.ign != nil && s.ign.MatchesPath(rel) {
+				return nil
+			}
+			if shouldIndexFile(path) {
+				files = append(files, path)
 			}
 			return nil
+		})
+		if err != nil {
+			return err
 		}
-		rel, _ := filepath.Rel(s.repoRoot, path)
-		if s.ign != nil && s.ign.MatchesPath(rel) {
-			return nil
-		}
-		if shouldIndexFile(path) {
-			files = append(files, path)
-		}
-		return nil
-	})
-	if err != nil {
-		return err
-	}
-	for _, f := range files {
-		if err := s.indexFile(f); err != nil {
-			// continue on error
+		for _, f := range files {
+			if err := s.indexFile(f); err != nil {
+				// continue on error
+			}
 		}
 	}
 	return nil
@@ -129,6 +156,7 @@ func (s *IndexerService) indexFile(path string) error {
 	hasher := sha1.New()
 	if _, err := io.Copy(hasher, f); err == nil {
 		sum := hex.EncodeToString(hasher.Sum(nil))
+		changed := false
 		s.mu.Lock()
 		prev, ok := s.fileHashes[path]
 		if ok && prev == sum {
@@ -136,7 +164,11 @@ func (s *IndexerService) indexFile(path string) error {
 			return nil
 		}
 		s.fileHashes[path] = sum
+		changed = true
 		s.mu.Unlock()
+		if changed {
+			s.notifyContentChange()
+		}
 		// rewind
 		if _, err := f.Seek(0, io.SeekStart); err != nil {
 			return err
@@ -146,6 +178,34 @@ func (s *IndexerService) indexFile(path string) error {
 		f.Seek(0, io.SeekStart)
 	}
 	// read file and chunk by lines
+	if strings.HasSuffix(strings.ToLower(path), ".go") && s.analyzer != nil {
+		analysis, analyzeErr := s.analyzer.AnalyzeFile(path)
+		if analyzeErr == nil {
+			summary, marshalErr := json.Marshal(analysis)
+			if marshalErr == nil {
+				repoRoot := reposcope.RepoForPath(path, s.repoRoots)
+				collection := reposcope.CollectionName(repoRoot)
+				if s.ollama != nil {
+					text := string(summary)
+					vec, embErr := s.ollama.GetEmbedding("default", text)
+					if embErr == nil && s.qdrant != nil {
+						payload := map[string]interface{}{
+							"path":        path,
+							"chunk_index": 0,
+							"code":        text,
+							"repo_root":   repoRoot,
+							"ast_summary": analysis,
+						}
+						_ = s.qdrant.UpsertPoint(collection, s.idFor(path, 0), vec, payload)
+					}
+				}
+				go s.saveState(repoRoot)
+				return nil
+			}
+		}
+	}
+
+	// fallback: index plain text chunks for non-Go files
 	rd := bufio.NewReader(f)
 	var buf strings.Builder
 	const chunkSize = 2000 // chars approx
@@ -160,16 +220,18 @@ func (s *IndexerService) indexFile(path string) error {
 			text := buf.String()
 			buf.Reset()
 			id := s.idFor(path, idx)
+			repoRoot := reposcope.RepoForPath(path, s.repoRoots)
+			collection := reposcope.CollectionName(repoRoot)
 			// compute embedding
 			if s.ollama != nil {
 				vec, embErr := s.ollama.GetEmbedding("default", text)
 				if embErr == nil && s.qdrant != nil {
-					payload := map[string]interface{}{"path": path, "chunk_index": idx, "code": text}
-					_ = s.qdrant.UpsertPoint("repo_docs", id, vec, payload)
+					payload := map[string]interface{}{"path": path, "chunk_index": idx, "code": text, "repo_root": repoRoot}
+					_ = s.qdrant.UpsertPoint(collection, id, vec, payload)
 				}
 			}
 			// persist state asynchronously to avoid blocking
-			go s.saveState()
+			go s.saveState(repoRoot)
 			idx++
 		}
 		if err == io.EOF {
@@ -180,37 +242,52 @@ func (s *IndexerService) indexFile(path string) error {
 }
 
 // state file path (configurable)
-func (s *IndexerService) stateFilePath() string {
-	if s.statePath != "" {
-		return s.statePath
+func (s *IndexerService) stateFilePath(repoRoot string) string {
+	if strings.TrimSpace(repoRoot) == "" {
+		repoRoot = s.repoRoot
 	}
-	return filepath.Join(s.repoRoot, ".indexer_state.json")
+	if s.statePath != "" {
+		return reposcope.StatePathForRepo(s.statePath, repoRoot)
+	}
+	return reposcope.StatePathForRepo(filepath.Join(repoRoot, ".indexer_state.json"), repoRoot)
 }
 
-func (s *IndexerService) saveState() {
+func (s *IndexerService) saveState(repoRoot string) {
 	s.mu.Lock()
-	data, err := json.MarshalIndent(s.fileHashes, "", "  ")
+	state := make(map[string]string)
+	for path, hash := range s.fileHashes {
+		if path == repoRoot || strings.HasPrefix(path, repoRoot+string(os.PathSeparator)) {
+			state[path] = hash
+		}
+	}
+	data, err := json.MarshalIndent(state, "", "  ")
 	s.mu.Unlock()
 	if err != nil {
 		return
 	}
-	tmp := s.stateFilePath() + ".tmp"
+	tmp := s.stateFilePath(repoRoot) + ".tmp"
 	_ = os.WriteFile(tmp, data, 0644)
-	_ = os.Rename(tmp, s.stateFilePath())
+	_ = os.Rename(tmp, s.stateFilePath(repoRoot))
 }
 
 func (s *IndexerService) loadState() {
-	p := s.stateFilePath()
-	b, err := os.ReadFile(p)
-	if err != nil {
-		return
-	}
-	m := make(map[string]string)
-	if err := json.Unmarshal(b, &m); err != nil {
-		return
+	merged := make(map[string]string)
+	for _, repoRoot := range s.repoRoots {
+		p := s.stateFilePath(repoRoot)
+		b, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		m := make(map[string]string)
+		if err := json.Unmarshal(b, &m); err != nil {
+			continue
+		}
+		for path, hash := range m {
+			merged[path] = hash
+		}
 	}
 	s.mu.Lock()
-	s.fileHashes = m
+	s.fileHashes = merged
 	s.mu.Unlock()
 }
 
@@ -234,12 +311,14 @@ func (s *IndexerService) StartWatcher() error {
 	go func() {
 		defer s.wg.Done()
 		// add root recursively
-		filepath.Walk(s.repoRoot, func(path string, info os.FileInfo, err error) error {
-			if err == nil && info.IsDir() {
-				s.watcher.Add(path)
-			}
-			return nil
-		})
+		for _, repoRoot := range s.repoRoots {
+			filepath.Walk(repoRoot, func(path string, info os.FileInfo, err error) error {
+				if err == nil && info.IsDir() {
+					s.watcher.Add(path)
+				}
+				return nil
+			})
+		}
 		for {
 			select {
 			case ev := <-s.watcher.Events:
@@ -276,9 +355,14 @@ func (s *IndexerService) ClearState() error {
 	s.mu.Lock()
 	s.fileHashes = make(map[string]string)
 	s.mu.Unlock()
-	p := s.stateFilePath()
-	if _, err := os.Stat(p); err == nil {
-		return os.Remove(p)
+	var firstErr error
+	for _, repoRoot := range s.repoRoots {
+		p := s.stateFilePath(repoRoot)
+		if _, err := os.Stat(p); err == nil {
+			if rmErr := os.Remove(p); rmErr != nil && firstErr == nil {
+				firstErr = rmErr
+			}
+		}
 	}
-	return nil
+	return firstErr
 }

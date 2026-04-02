@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"ollama-gateway/pkg/reposcope"
 )
 
 type Config struct {
@@ -20,6 +22,7 @@ type Config struct {
 	LogLevel               string
 	LogFormat              string
 	RepoRoot               string
+	RepoRoots              []string
 	VectorStorePath        string
 	VectorStorePreferLocal bool
 	// IndexerStatePath: path to persist indexer state (file)
@@ -29,15 +32,26 @@ type Config struct {
 	RateLimitEndpoints map[string]int
 	HTTPTimeoutSeconds int
 	HTTPMaxRetries     int
+	AgentToolsDir      string
+	MongoURI           string
+	RemoteAPIURL       string
+	RemoteAPIKey       string
 	CacheBackend       string
 	RedisURL           string
 	// Embedding cache settings
 	EmbeddingCacheTTLSeconds int
 	EmbeddingCacheMaxEntries int
+	RAGCacheTTLSeconds       int
+	RAGCacheMaxEntries       int
 }
 
 func Load() *Config {
-	repoRoot := getEnv("REPO_ROOT", ".")
+	repoRoots := parseRepoRoots()
+	repoRoots = reposcope.CanonicalizeRoots(repoRoots)
+	repoRoot := "."
+	if len(repoRoots) > 0 {
+		repoRoot = repoRoots[0]
+	}
 	defaultState := filepath.Join(repoRoot, ".indexer_state.json")
 	defaultVectorStore := filepath.Join(repoRoot, ".vector_store.json")
 	return &Config{
@@ -48,6 +62,7 @@ func Load() *Config {
 		LogLevel:                 getEnv("LOG_LEVEL", "info"),
 		LogFormat:                getEnv("LOG_FORMAT", "json"),
 		RepoRoot:                 repoRoot,
+		RepoRoots:                repoRoots,
 		VectorStorePath:          getEnv("VECTOR_STORE_PATH", defaultVectorStore),
 		VectorStorePreferLocal:   getEnvAsBool("VECTOR_STORE_PREFER_LOCAL", false),
 		IndexerStatePath:         getEnv("INDEXER_STATE_PATH", defaultState),
@@ -56,11 +71,34 @@ func Load() *Config {
 		RateLimitEndpoints:       getEnvAsIntMap("RATE_LIMIT_ENDPOINTS", map[string]int{}),
 		HTTPTimeoutSeconds:       getEnvAsInt("HTTP_TIMEOUT_SECONDS", 30),
 		HTTPMaxRetries:           getEnvAsInt("HTTP_MAX_RETRIES", 3),
+		AgentToolsDir:            getEnv("AGENT_TOOLS_DIR", filepath.Join(repoRoot, "agent-tools")),
+		MongoURI:                 getEnv("MONGO_URI", "mongodb://localhost:27017"),
+		RemoteAPIURL:             getEnv("REMOTE_API_URL", ""),
+		RemoteAPIKey:             getEnv("REMOTE_API_KEY", ""),
 		CacheBackend:             getEnv("CACHE_BACKEND", "memory"),
 		RedisURL:                 getEnv("REDIS_URL", "redis://localhost:6379/0"),
 		EmbeddingCacheTTLSeconds: getEnvAsInt("EMBEDDING_CACHE_TTL_SECONDS", 3600),
 		EmbeddingCacheMaxEntries: getEnvAsInt("EMBEDDING_CACHE_MAX_ENTRIES", 1000),
+		RAGCacheTTLSeconds:       getEnvAsInt("RAG_CACHE_TTL_SECONDS", 1800),
+		RAGCacheMaxEntries:       getEnvAsInt("RAG_CACHE_MAX_ENTRIES", 500),
 	}
+}
+
+func parseRepoRoots() []string {
+	v := strings.TrimSpace(os.Getenv("REPO_ROOTS"))
+	if v != "" {
+		parts := strings.Split(v, ",")
+		roots := make([]string, 0, len(parts))
+		for _, p := range parts {
+			if trimmed := strings.TrimSpace(p); trimmed != "" {
+				roots = append(roots, trimmed)
+			}
+		}
+		if len(roots) > 0 {
+			return roots
+		}
+	}
+	return []string{getEnv("REPO_ROOT", ".")}
 }
 
 func getEnv(key, fallback string) string {

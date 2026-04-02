@@ -2,60 +2,49 @@ package services
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
-	"strings"
-	"time"
 
 	"ollama-gateway/internal/domain"
 )
 
 type AgentService struct {
 	ollamaService *OllamaService
-	repoRoot      string
 	logger        *slog.Logger
+	toolRegistry  *ToolRegistry
 }
 
 var _ domain.AgentRunner = (*AgentService)(nil)
 
-func NewAgentService(ollamaService *OllamaService, repoRoot string, logger *slog.Logger) *AgentService {
+func NewAgentService(ollamaService *OllamaService, logger *slog.Logger, toolRegistry *ToolRegistry) *AgentService {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	if toolRegistry == nil {
+		toolRegistry = NewToolRegistry("", ".", logger)
+	}
 	return &AgentService{
 		ollamaService: ollamaService,
-		repoRoot:      repoRoot,
 		logger:        logger,
+		toolRegistry:  toolRegistry,
 	}
-}
-
-func (s *AgentService) safeReadFile(input string) string {
-	absPath, err := filepath.Abs(input)
-	if err != nil {
-		return "ruta inválida"
-	}
-	allowedRoot, _ := filepath.Abs(s.repoRoot)
-	if !strings.HasPrefix(absPath, allowedRoot+string(os.PathSeparator)) && absPath != allowedRoot {
-		return "acceso denegado: fuera del directorio permitido"
-	}
-	data, e := os.ReadFile(absPath)
-	if e != nil {
-		return e.Error()
-	}
-	return string(data)
 }
 
 func (s *AgentService) Run(prompt string) string {
-	toolsDef := `
-Herramientas:
-1. get_time -> devuelve hora
-2. read_file -> lee archivo del proyecto
+	toolsDef := joinToolDescriptions(s.toolRegistry.ToolDescriptions())
+	if toolsDef == "" {
+		toolsDef = "- get_time (function): devuelve hora actual\n- read_file (function): lee archivo del proyecto"
+	}
+
+	instructions := `
+Herramientas disponibles:
+` + toolsDef + `
 
 Formato JSON obligado:
-{"action": "...", "input": "...", "response": "..."}
+{"action":"nombre_tool","args":{"key":"value"},"input":"opcional","response":"..."}
 `
-	fullPrompt := prompt + "\n" + toolsDef
+
+	fullPrompt := prompt + "\n" + instructions
 
 	model := "qwen2.5:7b"
 	resp, err := s.ollamaService.Generate(model, fullPrompt)
@@ -64,21 +53,39 @@ Formato JSON obligado:
 	}
 
 	var ar struct {
-		Action   string `json:"action"`
-		Input    string `json:"input"`
-		Response string `json:"response"`
+		Action   string            `json:"action"`
+		Args     map[string]string `json:"args"`
+		Input    string            `json:"input"`
+		Response string            `json:"response"`
 	}
-	json.Unmarshal([]byte(resp), &ar)
+	if err := json.Unmarshal([]byte(resp), &ar); err != nil {
+		return resp
+	}
 
-	switch ar.Action {
-	case "get_time":
-		return time.Now().Format(time.RFC3339)
-	case "read_file":
-		return s.safeReadFile(ar.Input)
-	default:
-		if ar.Response != "" {
-			return ar.Response
+	if ar.Action != "" {
+		args := ar.Args
+		if args == nil {
+			args = map[string]string{}
 		}
-		return "No action matched: " + resp
+		if ar.Input != "" && args["path"] == "" && ar.Action == "read_file" {
+			args["path"] = ar.Input
+		}
+
+		tool, ok := s.toolRegistry.Get(ar.Action)
+		if ok {
+			out, e := tool.Run(args)
+			if e != nil {
+				s.logger.Warn("tool execution failed", slog.String("tool", ar.Action), slog.String("error", e.Error()))
+				return e.Error()
+			}
+			return out
+		}
+		s.logger.Warn("tool not found", slog.String("tool", ar.Action))
+		return fmt.Sprintf("tool no encontrada: %s", ar.Action)
 	}
+
+	if ar.Response != "" {
+		return ar.Response
+	}
+	return resp
 }

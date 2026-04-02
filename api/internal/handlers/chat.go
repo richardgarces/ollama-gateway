@@ -32,6 +32,7 @@ func (h *ChatHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	for _, m := range req.Messages {
 		prompt += m.Role + ": " + m.Content + "\n"
 	}
+	prompt = withRequestIDPrompt(r, prompt)
 
 	if req.Stream {
 		if err := httputil.WriteSSEHeaders(w); err != nil {

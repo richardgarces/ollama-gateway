@@ -46,11 +46,15 @@ func (m *AuthMiddleware) JWT(next http.Handler) http.Handler {
 		userID := ""
 		if claims, ok := token.Claims.(jwt.MapClaims); ok {
 			if v, ok := claims["user"].(string); ok {
-				userID = v
+				userID = strings.TrimSpace(v)
 			} else if v, ok := claims["sub"].(string); ok {
-				userID = v
+				userID = strings.TrimSpace(v)
 			} else if v, ok := claims["user_id"].(string); ok {
-				userID = v
+				userID = strings.TrimSpace(v)
+			} else if v, ok := claims["username"].(string); ok {
+				userID = strings.TrimSpace(v)
+			} else if v, ok := claims["email"].(string); ok {
+				userID = strings.TrimSpace(v)
 			}
 		}
 

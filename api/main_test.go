@@ -134,7 +134,7 @@ func TestChatHandlerEmptyMessages(t *testing.T) {
 }
 
 func TestSelectModelCode(t *testing.T) {
-	m := services.NewRouterService(slog.Default()).SelectModel("implement a func to parse JSON")
+	m := services.NewRouterService(nil, nil, slog.Default()).SelectModel("implement a func to parse JSON")
 	if m != "deepseek-coder:6.7b" {
 		t.Errorf("expected deepseek-coder, got %s", m)
 	}
@@ -142,14 +142,14 @@ func TestSelectModelCode(t *testing.T) {
 
 func TestSelectModelLong(t *testing.T) {
 	longPrompt := string(make([]byte, 400))
-	m := services.NewRouterService(slog.Default()).SelectModel(longPrompt)
+	m := services.NewRouterService(nil, nil, slog.Default()).SelectModel(longPrompt)
 	if m != "qwen2.5:7b" {
 		t.Errorf("expected qwen2.5:7b, got %s", m)
 	}
 }
 
 func TestSelectModelDefault(t *testing.T) {
-	m := services.NewRouterService(slog.Default()).SelectModel("hola")
+	m := services.NewRouterService(nil, nil, slog.Default()).SelectModel("hola")
 	if m != "gemma:2b" {
 		t.Errorf("expected gemma:2b, got %s", m)
 	}
@@ -199,7 +199,7 @@ func TestGenerateHandlerServiceError(t *testing.T) {
 }
 
 func TestOpenAIChatCompletions(t *testing.T) {
-	handler := handlers.NewOpenAIHandler(fakeOllamaService{}, fakeRAGService{result: "respuesta"})
+	handler := handlers.NewOpenAIHandler(fakeOllamaService{}, fakeRAGService{result: "respuesta"}, nil, nil)
 	body, _ := json.Marshal(map[string]any{
 		"model":    "local-rag",
 		"messages": []domain.Message{{Role: "user", Content: "hola"}},
@@ -226,7 +226,7 @@ func TestOpenAIChatCompletions(t *testing.T) {
 }
 
 func TestOpenAIChatCompletionsStream(t *testing.T) {
-	handler := handlers.NewOpenAIHandler(fakeOllamaService{}, fakeRAGService{result: "respuesta"})
+	handler := handlers.NewOpenAIHandler(fakeOllamaService{}, fakeRAGService{result: "respuesta"}, nil, nil)
 	body, _ := json.Marshal(map[string]any{
 		"model":    "local-rag",
 		"stream":   true,

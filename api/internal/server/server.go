@@ -18,11 +18,13 @@ import (
 )
 
 type Server struct {
-	cfg        *config.Config
-	router     http.Handler
-	httpServer *http.Server
-	indexer    domain.Indexer
-	cache      cache.Cache
+	cfg                 *config.Config
+	router              http.Handler
+	httpServer          *http.Server
+	indexer             domain.Indexer
+	cache               cache.Cache
+	conversationService *services.ConversationService
+	profileService      *services.ProfileService
 }
 
 func New(cfg *config.Config, cacheBackend cache.Cache) *Server {
@@ -38,11 +40,29 @@ func (s *Server) setupRoutes() {
 	logger := slog.Default()
 	metricsCollector := observability.NewMetricsCollector()
 	rateLimiter := observability.NewRateLimiter(s.cfg.RateLimitRPM, time.Minute)
+	repoRoots := s.cfg.RepoRoots
+	if len(repoRoots) == 0 {
+		repoRoots = []string{s.cfg.RepoRoot}
+	}
 
 	// Inicializar servicios con inyección de dependencias
 	ollamaService := services.NewOllamaService(s.cfg, logger, s.cache)
-	routerService := services.NewRouterService(logger)
-	agentService := services.NewAgentService(ollamaService, s.cfg.RepoRoot, logger)
+	routerService := services.NewRouterService(s.cfg, ollamaService, logger)
+	toolRegistry := services.NewToolRegistry(s.cfg.AgentToolsDir, s.cfg.RepoRoot, logger)
+	agentService := services.NewAgentService(ollamaService, logger, toolRegistry)
+	conversationService, err := services.NewConversationService(s.cfg.MongoURI, logger)
+	if err != nil {
+		logger.Warn("conversation service no disponible; se continuará sin persistencia", slog.String("error", err.Error()))
+	} else {
+		s.conversationService = conversationService
+	}
+	profileService, err := services.NewProfileService(s.cfg.MongoURI, logger)
+	if err != nil {
+		logger.Warn("profile service no disponible; se continuará sin perfiles", slog.String("error", err.Error()))
+	} else {
+		s.profileService = profileService
+	}
+	patchService := services.NewPatchService(logger)
 	repoService := services.NewRepoService(ollamaService, s.cfg.RepoRoot, logger)
 	qdrantService := services.NewQdrantService(
 		s.cfg.QdrantURL,
@@ -53,8 +73,18 @@ func (s *Server) setupRoutes() {
 		s.cfg.HTTPMaxRetries,
 		logger,
 	)
-	ragService := services.NewRAGService(ollamaService, routerService, qdrantService, logger, s.cache)
-	indexerService, _ := services.NewIndexerService(s.cfg.RepoRoot, s.cfg.IndexerStatePath, ollamaService, qdrantService, logger)
+	ragService := services.NewRAGService(
+		ollamaService,
+		routerService,
+		qdrantService,
+		logger,
+		s.cache,
+		repoRoots,
+		s.cfg.RAGCacheTTLSeconds,
+		s.cfg.RAGCacheMaxEntries,
+	)
+	indexerService, _ := services.NewIndexerService(repoRoots, s.cfg.IndexerStatePath, ollamaService, qdrantService, logger)
+	indexerService.SetOnContentChange(ragService.InvalidateResponseCache)
 
 	var ollamaClient domain.OllamaClient = ollamaService
 	var vectorStore domain.VectorStore = qdrantService
@@ -69,10 +99,13 @@ func (s *Server) setupRoutes() {
 	agentHandler := handlers.NewAgentHandler(agentRunner)
 	chatHandler := handlers.NewChatHandler(ragEngine)
 	repoHandler := handlers.NewRepoHandler(repoService)
+	profileHandler := handlers.NewProfileHandler(s.profileService)
+	patchHandler := handlers.NewPatchHandler(s.cfg.RepoRoot, patchService)
 	metricsHandler := handlers.NewMetricsHandler(metricsCollector)
 	indexerHandler := handlers.NewIndexerHandler(indexer)
-	searchHandler := handlers.NewSearchHandler(ollamaClient, vectorStore)
-	openaiHandler := handlers.NewOpenAIHandler(ollamaClient, ragEngine)
+	searchHandler := handlers.NewSearchHandler(ollamaClient, vectorStore, repoRoots)
+	openaiHandler := handlers.NewOpenAIHandler(ollamaClient, ragEngine, s.conversationService, s.profileService)
+	wsHandler := handlers.NewWSHandler(ragEngine, s.cfg.JWTSecret)
 	healthHandler := handlers.NewHealthHandler(s.cfg)
 	authMiddleware := middleware.NewAuthMiddleware(s.cfg.JWTSecret)
 
@@ -97,6 +130,7 @@ func (s *Server) setupRoutes() {
 	mux.HandleFunc("POST /openai/v1/embeddings", openaiHandler.Embeddings)
 	mux.HandleFunc("POST /openai/v1/completions", openaiHandler.Completions)
 	mux.HandleFunc("POST /openai/v1/chat/completions", openaiHandler.ChatCompletions)
+	mux.HandleFunc("GET /ws/chat", wsHandler.Handle)
 
 	// Rutas protegidas con JWT
 	mux.Handle("POST /api/generate", authMiddleware.JWT(http.HandlerFunc(generateHandler.Handle)))
@@ -104,6 +138,10 @@ func (s *Server) setupRoutes() {
 	mux.Handle("POST /api/refactor", authMiddleware.JWT(http.HandlerFunc(repoHandler.Refactor)))
 	mux.Handle("GET /api/analyze-repo", authMiddleware.JWT(http.HandlerFunc(repoHandler.Analyze)))
 	mux.Handle("POST /api/v1/chat/completions", authMiddleware.JWT(http.HandlerFunc(chatHandler.Handle)))
+	mux.Handle("GET /api/profile", authMiddleware.JWT(http.HandlerFunc(profileHandler.Get)))
+	mux.Handle("PUT /api/profile", authMiddleware.JWT(http.HandlerFunc(profileHandler.Put)))
+	mux.Handle("POST /api/patch", authMiddleware.JWT(http.HandlerFunc(patchHandler.Apply)))
+	mux.Handle("GET /api/patch/preview", authMiddleware.JWT(http.HandlerFunc(patchHandler.Preview)))
 
 	s.router = chain(
 		mux,
@@ -112,7 +150,7 @@ func (s *Server) setupRoutes() {
 		middleware.CORS,
 		middleware.Compress,
 		middleware.Metrics(metricsCollector),
-		middleware.RateLimit(rateLimiter, s.cfg, "/health", "/health/liveness", "/health/readiness", "/metrics"),
+		middleware.RateLimit(rateLimiter, s.cfg, "/health", "/health/liveness", "/health/readiness", "/metrics", "/ws/chat"),
 	)
 }
 
@@ -135,6 +173,16 @@ func (s *Server) Start() error {
 func (s *Server) Shutdown(ctx context.Context) error {
 	if s.indexer != nil {
 		s.indexer.StopWatcher()
+	}
+	if s.conversationService != nil {
+		if err := s.conversationService.Disconnect(ctx); err != nil {
+			slog.Warn("error al cerrar conexión de MongoDB", slog.String("error", err.Error()))
+		}
+	}
+	if s.profileService != nil {
+		if err := s.profileService.Disconnect(ctx); err != nil {
+			slog.Warn("error al cerrar perfil de MongoDB", slog.String("error", err.Error()))
+		}
 	}
 	// No hay buffer de métricas pendiente para flush explícito en la implementación actual.
 	slog.Info("flush métricas completado")

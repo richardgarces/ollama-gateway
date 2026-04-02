@@ -46,6 +46,18 @@ type RefactorResponse struct {
 	Refactored string `json:"refactored"`
 }
 
+type PatchRequest struct {
+	Response string `json:"response"`
+	Apply    bool   `json:"apply"`
+}
+
+type PatchResponse struct {
+	CodeBlocks []CodeBlock   `json:"code_blocks"`
+	Diffs      []UnifiedDiff `json:"diffs"`
+	Applied    bool          `json:"applied"`
+	AppliedNum int           `json:"applied_count"`
+}
+
 type AnalyzeResponse struct {
 	Files []FileAnalysis `json:"files"`
 }

@@ -21,6 +21,7 @@ import (
 	"ollama-gateway/internal/server"
 	"ollama-gateway/internal/services"
 	"ollama-gateway/pkg/cache"
+	"ollama-gateway/pkg/reposcope"
 
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -130,12 +131,12 @@ func TestFullRAGPipeline(t *testing.T) {
 	cacheBackend := cache.NewMemory()
 	ollama := services.NewOllamaService(cfg, logger, cacheBackend)
 	qdrant := services.NewQdrantService(qdrantURL, repoRoot, cfg.VectorStorePath, false, 5, 1, logger)
-	indexer, err := services.NewIndexerService(repoRoot, cfg.IndexerStatePath, ollama, qdrant, logger)
+	indexer, err := services.NewIndexerService([]string{repoRoot}, cfg.IndexerStatePath, ollama, qdrant, logger)
 	if err != nil {
 		t.Fatalf("NewIndexerService() error = %v", err)
 	}
-	router := services.NewRouterService(logger)
-	rag := services.NewRAGService(ollama, router, qdrant, logger, cacheBackend)
+	router := services.NewRouterService(cfg, ollama, logger)
+	rag := services.NewRAGService(ollama, router, qdrant, logger, cacheBackend, []string{repoRoot}, 1800, 500)
 
 	if err := indexer.IndexRepo(); err != nil {
 		t.Fatalf("IndexRepo() error = %v", err)
@@ -145,7 +146,7 @@ func TestFullRAGPipeline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetEmbedding() error = %v", err)
 	}
-	res, err := qdrant.Search("repo_docs", emb, 5)
+	res, err := qdrant.Search(reposcope.CollectionName(repoRoot), emb, 5)
 	if err != nil {
 		t.Fatalf("Search() error = %v", err)
 	}

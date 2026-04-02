@@ -1,5 +1,7 @@
 package domain
 
+import "context"
+
 type OllamaClient interface {
 	Generate(model, prompt string) (string, error)
 	StreamGenerate(model, prompt string, onChunk func(string) error) error
@@ -25,4 +27,19 @@ type Indexer interface {
 
 type AgentRunner interface {
 	Run(prompt string) string
+}
+
+type ConversationStore interface {
+	Create(ctx context.Context, userID string, messages []Message) (*Conversation, error)
+	Append(ctx context.Context, conversationID, userID string, messages []Message) (*Conversation, error)
+	GetByID(ctx context.Context, conversationID, userID string) (*Conversation, error)
+	ListByUser(ctx context.Context, userID string, limit int) ([]Conversation, error)
+}
+
+type ProfileStore interface {
+	Create(ctx context.Context, profile Profile) (*Profile, error)
+	GetByUserID(ctx context.Context, userID string) (*Profile, error)
+	Update(ctx context.Context, profile Profile) (*Profile, error)
+	Upsert(ctx context.Context, profile Profile) (*Profile, error)
+	Delete(ctx context.Context, userID string) error
 }
