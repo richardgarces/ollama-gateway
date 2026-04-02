@@ -9,14 +9,10 @@ import (
 )
 
 type GenerateHandler struct {
-	ragService interface {
-		GenerateWithContext(prompt string) (string, error)
-	}
+	ragService domain.RAGEngine
 }
 
-func NewGenerateHandler(ragService interface {
-	GenerateWithContext(prompt string) (string, error)
-}) *GenerateHandler {
+func NewGenerateHandler(ragService domain.RAGEngine) *GenerateHandler {
 	return &GenerateHandler{ragService: ragService}
 }
 
@@ -33,18 +29,11 @@ func (h *GenerateHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.Stream {
-		streamer, ok := h.ragService.(interface {
-			StreamGenerateWithContext(prompt string, onChunk func(string) error) error
-		})
-		if !ok {
-			httputil.WriteError(w, http.StatusNotImplemented, "streaming no soportado")
-			return
-		}
 		if err := httputil.WriteSSEHeaders(w); err != nil {
 			httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		if err := streamer.StreamGenerateWithContext(req.Prompt, func(chunk string) error {
+		if err := h.ragService.StreamGenerateWithContext(req.Prompt, func(chunk string) error {
 			return httputil.WriteSSEData(w, map[string]string{"result": chunk})
 		}); err != nil {
 			return

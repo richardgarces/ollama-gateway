@@ -3,6 +3,7 @@ package config
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -16,12 +17,20 @@ type Config struct {
 	OllamaURL              string
 	QdrantURL              string
 	JWTSecret              []byte
+	LogLevel               string
+	LogFormat              string
 	RepoRoot               string
 	VectorStorePath        string
 	VectorStorePreferLocal bool
 	// IndexerStatePath: path to persist indexer state (file)
-	IndexerStatePath string
-	RateLimitRPM     int
+	IndexerStatePath   string
+	RateLimitRPM       int
+	RateLimitUserRPM   int
+	RateLimitEndpoints map[string]int
+	HTTPTimeoutSeconds int
+	HTTPMaxRetries     int
+	CacheBackend       string
+	RedisURL           string
 	// Embedding cache settings
 	EmbeddingCacheTTLSeconds int
 	EmbeddingCacheMaxEntries int
@@ -36,11 +45,19 @@ func Load() *Config {
 		OllamaURL:                getEnv("OLLAMA_URL", "http://ollama:11434"),
 		QdrantURL:                getEnv("QDRANT_URL", "http://qdrant:6333"),
 		JWTSecret:                loadJWTSecret(),
+		LogLevel:                 getEnv("LOG_LEVEL", "info"),
+		LogFormat:                getEnv("LOG_FORMAT", "json"),
 		RepoRoot:                 repoRoot,
 		VectorStorePath:          getEnv("VECTOR_STORE_PATH", defaultVectorStore),
 		VectorStorePreferLocal:   getEnvAsBool("VECTOR_STORE_PREFER_LOCAL", false),
 		IndexerStatePath:         getEnv("INDEXER_STATE_PATH", defaultState),
 		RateLimitRPM:             getEnvAsInt("RATE_LIMIT_RPM", 60),
+		RateLimitUserRPM:         getEnvAsInt("RATE_LIMIT_USER_RPM", 60),
+		RateLimitEndpoints:       getEnvAsIntMap("RATE_LIMIT_ENDPOINTS", map[string]int{}),
+		HTTPTimeoutSeconds:       getEnvAsInt("HTTP_TIMEOUT_SECONDS", 30),
+		HTTPMaxRetries:           getEnvAsInt("HTTP_MAX_RETRIES", 3),
+		CacheBackend:             getEnv("CACHE_BACKEND", "memory"),
+		RedisURL:                 getEnv("REDIS_URL", "redis://localhost:6379/0"),
 		EmbeddingCacheTTLSeconds: getEnvAsInt("EMBEDDING_CACHE_TTL_SECONDS", 3600),
 		EmbeddingCacheMaxEntries: getEnvAsInt("EMBEDDING_CACHE_MAX_ENTRIES", 1000),
 	}
@@ -84,6 +101,24 @@ func getEnvAsBool(key string, fallback bool) bool {
 		log.Printf("WARN: %s inválido (%q), usando %t", key, v, fallback)
 		return fallback
 	}
+}
+
+func getEnvAsIntMap(key string, fallback map[string]int) map[string]int {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return fallback
+	}
+	parsed := make(map[string]int)
+	if err := json.Unmarshal([]byte(v), &parsed); err != nil {
+		log.Printf("WARN: %s inválido (%q), usando fallback", key, v)
+		return fallback
+	}
+	for k, n := range parsed {
+		if n <= 0 {
+			delete(parsed, k)
+		}
+	}
+	return parsed
 }
 
 func loadJWTSecret() []byte {

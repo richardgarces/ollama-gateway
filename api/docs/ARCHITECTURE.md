@@ -3,6 +3,7 @@
 Resumen:
 - El proyecto está organizado siguiendo Clean Architecture: capa de presentación (`internal/handlers`), lógica de negocio (`internal/services`), modelos (`internal/domain`), configuración (`internal/config`) y utilidades (`pkg/httputil`).
 - El entrypoint es `cmd/server/main.go` que crea `internal/server.New(cfg)` y arranca el HTTP server.
+- El enrutamiento HTTP usa `net/http` estándar (`http.ServeMux`) con pattern matching por método y path (Go 1.22+).
 
 Componentes principales:
 - Ollama: LLM externo (máquina A). Se comunica por HTTP con la API (`/api/generate`, `/api/embeddings`).

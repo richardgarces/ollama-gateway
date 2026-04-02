@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
@@ -11,6 +12,10 @@ import (
 type AuthMiddleware struct {
 	jwtSecret []byte
 }
+
+type authContextKey string
+
+const userIDContextKey authContextKey = "user-id"
 
 func NewAuthMiddleware(jwtSecret []byte) *AuthMiddleware {
 	return &AuthMiddleware{jwtSecret: jwtSecret}
@@ -38,6 +43,26 @@ func (m *AuthMiddleware) JWT(next http.Handler) http.Handler {
 			return
 		}
 
-		next.ServeHTTP(w, r)
+		userID := ""
+		if claims, ok := token.Claims.(jwt.MapClaims); ok {
+			if v, ok := claims["user"].(string); ok {
+				userID = v
+			} else if v, ok := claims["sub"].(string); ok {
+				userID = v
+			} else if v, ok := claims["user_id"].(string); ok {
+				userID = v
+			}
+		}
+
+		ctx := context.WithValue(r.Context(), userIDContextKey, userID)
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+func UserIDFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	v, _ := ctx.Value(userIDContextKey).(string)
+	return v
 }

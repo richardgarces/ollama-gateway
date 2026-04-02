@@ -31,10 +31,18 @@ var (
 		},
 		[]string{"method", "path"},
 	)
+
+	rateLimitDecisions = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "ollama_gateway_rate_limit_decisions_total",
+			Help: "Rate limit decisions by user and endpoint",
+		},
+		[]string{"user_id", "endpoint", "action"},
+	)
 )
 
 func init() {
-	prometheus.MustRegister(httpRequests, httpRequestErrors, httpRequestDuration)
+	prometheus.MustRegister(httpRequests, httpRequestErrors, httpRequestDuration, rateLimitDecisions)
 }
 
 // ObservePrometheus records metrics into Prometheus collectors.
@@ -44,4 +52,11 @@ func ObservePrometheus(method, path string, status int, duration time.Duration) 
 		httpRequestErrors.WithLabelValues(method, path).Inc()
 	}
 	httpRequestDuration.WithLabelValues(method, path).Observe(duration.Seconds())
+}
+
+func ObserveRateLimit(userID, endpoint, action string) {
+	if userID == "" {
+		userID = "anonymous"
+	}
+	rateLimitDecisions.WithLabelValues(userID, endpoint, action).Inc()
 }

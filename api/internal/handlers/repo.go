@@ -10,16 +10,15 @@ import (
 )
 
 type RepoHandler struct {
-	repoService interface {
-		Refactor(absPath string) (string, error)
-		AnalyzeRepo() (string, error)
-	}
+	repoService repoService
 }
 
-func NewRepoHandler(repoService interface {
+type repoService interface {
 	Refactor(absPath string) (string, error)
 	AnalyzeRepo() (string, error)
-}) *RepoHandler {
+}
+
+func NewRepoHandler(repoService repoService) *RepoHandler {
 	return &RepoHandler{repoService: repoService}
 }
 

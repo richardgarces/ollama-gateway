@@ -2,21 +2,31 @@ package services
 
 import (
 	"encoding/json"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"ollama-gateway/internal/domain"
 )
 
 type AgentService struct {
 	ollamaService *OllamaService
 	repoRoot      string
+	logger        *slog.Logger
 }
 
-func NewAgentService(ollamaService *OllamaService, repoRoot string) *AgentService {
+var _ domain.AgentRunner = (*AgentService)(nil)
+
+func NewAgentService(ollamaService *OllamaService, repoRoot string, logger *slog.Logger) *AgentService {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &AgentService{
 		ollamaService: ollamaService,
 		repoRoot:      repoRoot,
+		logger:        logger,
 	}
 }
 

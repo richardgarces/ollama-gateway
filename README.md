@@ -1,5 +1,7 @@
 # Ollama SaaS Gateway
 
+[![CI](https://github.com/Richard/ollama_saas_project/actions/workflows/ci.yml/badge.svg)](https://github.com/Richard/ollama_saas_project/actions/workflows/ci.yml)
+
 Ollama SaaS Gateway es un servidor en Go diseñado para convertir una instalación local o remota de Ollama en un gateway privado y extensible. Su objetivo es facilitar casos de uso de asistente de desarrollo (Copilot local), RAG (búsqueda+LLM), agentes con herramientas y APIs compatibles con OpenAI para integraciones.
 
 **Para un usuario final:**

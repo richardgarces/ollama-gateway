@@ -3,15 +3,15 @@ package handlers
 import (
 	"net/http"
 
-	"ollama-gateway/internal/services"
+	"ollama-gateway/internal/domain"
 	"ollama-gateway/pkg/httputil"
 )
 
 type IndexerHandler struct {
-	svc *services.IndexerService
+	svc domain.Indexer
 }
 
-func NewIndexerHandler(svc *services.IndexerService) *IndexerHandler {
+func NewIndexerHandler(svc domain.Indexer) *IndexerHandler {
 	return &IndexerHandler{svc: svc}
 }
 

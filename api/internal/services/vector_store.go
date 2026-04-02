@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"ollama-gateway/internal/domain"
 )
 
 type vectorPoint struct {
@@ -22,6 +24,8 @@ type diskVectorStore struct {
 	collections map[string]map[string]vectorPoint
 	mu          sync.RWMutex
 }
+
+var _ domain.VectorStore = (*diskVectorStore)(nil)
 
 func newDiskVectorStore(repoRoot, storePath string) (*diskVectorStore, error) {
 	resolvedPath, err := resolvePathWithinRoot(repoRoot, storePath)

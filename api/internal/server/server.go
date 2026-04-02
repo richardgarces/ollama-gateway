@@ -2,100 +2,122 @@ package server
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"net/http"
-	"os"
-	"os/signal"
-	"syscall"
 	"time"
 
 	"ollama-gateway/internal/config"
+	"ollama-gateway/internal/domain"
 	"ollama-gateway/internal/handlers"
 	"ollama-gateway/internal/middleware"
 	"ollama-gateway/internal/observability"
 	"ollama-gateway/internal/services"
+	"ollama-gateway/pkg/cache"
 
-	"github.com/gorilla/mux"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 type Server struct {
-	cfg    *config.Config
-	router *mux.Router
+	cfg        *config.Config
+	router     http.Handler
+	httpServer *http.Server
+	indexer    domain.Indexer
+	cache      cache.Cache
 }
 
-func New(cfg *config.Config) *Server {
+func New(cfg *config.Config, cacheBackend cache.Cache) *Server {
 	s := &Server{
-		cfg:    cfg,
-		router: mux.NewRouter(),
+		cfg:   cfg,
+		cache: cacheBackend,
 	}
 	s.setupRoutes()
 	return s
 }
 
 func (s *Server) setupRoutes() {
+	logger := slog.Default()
 	metricsCollector := observability.NewMetricsCollector()
 	rateLimiter := observability.NewRateLimiter(s.cfg.RateLimitRPM, time.Minute)
 
 	// Inicializar servicios con inyección de dependencias
-	ollamaService := services.NewOllamaService(s.cfg)
-	routerService := services.NewRouterService()
-	agentService := services.NewAgentService(ollamaService, s.cfg.RepoRoot)
-	repoService := services.NewRepoService(ollamaService, s.cfg.RepoRoot)
-	qdrantService := services.NewQdrantService(s.cfg.QdrantURL, s.cfg.RepoRoot, s.cfg.VectorStorePath, s.cfg.VectorStorePreferLocal)
-	ragService := services.NewRAGService(ollamaService, routerService, qdrantService)
-	indexerService, _ := services.NewIndexerService(s.cfg.RepoRoot, s.cfg.IndexerStatePath, ollamaService, qdrantService)
+	ollamaService := services.NewOllamaService(s.cfg, logger, s.cache)
+	routerService := services.NewRouterService(logger)
+	agentService := services.NewAgentService(ollamaService, s.cfg.RepoRoot, logger)
+	repoService := services.NewRepoService(ollamaService, s.cfg.RepoRoot, logger)
+	qdrantService := services.NewQdrantService(
+		s.cfg.QdrantURL,
+		s.cfg.RepoRoot,
+		s.cfg.VectorStorePath,
+		s.cfg.VectorStorePreferLocal,
+		s.cfg.HTTPTimeoutSeconds,
+		s.cfg.HTTPMaxRetries,
+		logger,
+	)
+	ragService := services.NewRAGService(ollamaService, routerService, qdrantService, logger, s.cache)
+	indexerService, _ := services.NewIndexerService(s.cfg.RepoRoot, s.cfg.IndexerStatePath, ollamaService, qdrantService, logger)
+
+	var ollamaClient domain.OllamaClient = ollamaService
+	var vectorStore domain.VectorStore = qdrantService
+	var ragEngine domain.RAGEngine = ragService
+	var indexer domain.Indexer = indexerService
+	var agentRunner domain.AgentRunner = agentService
+	s.indexer = indexer
 
 	// Inicializar handlers
 	authHandler := handlers.NewAuthHandler(s.cfg.JWTSecret)
-	generateHandler := handlers.NewGenerateHandler(ragService)
-	agentHandler := handlers.NewAgentHandler(agentService)
-	chatHandler := handlers.NewChatHandler(ragService)
+	generateHandler := handlers.NewGenerateHandler(ragEngine)
+	agentHandler := handlers.NewAgentHandler(agentRunner)
+	chatHandler := handlers.NewChatHandler(ragEngine)
 	repoHandler := handlers.NewRepoHandler(repoService)
 	metricsHandler := handlers.NewMetricsHandler(metricsCollector)
-	indexerHandler := handlers.NewIndexerHandler(indexerService)
-	searchHandler := handlers.NewSearchHandler(ollamaService, qdrantService)
-	openaiHandler := handlers.NewOpenAIHandler(ollamaService, ragService)
+	indexerHandler := handlers.NewIndexerHandler(indexer)
+	searchHandler := handlers.NewSearchHandler(ollamaClient, vectorStore)
+	openaiHandler := handlers.NewOpenAIHandler(ollamaClient, ragEngine)
+	healthHandler := handlers.NewHealthHandler(s.cfg)
+	authMiddleware := middleware.NewAuthMiddleware(s.cfg.JWTSecret)
 
-	// Middleware global
-	s.router.Use(middleware.RequestID)
-	s.router.Use(middleware.Logging)
-	s.router.Use(middleware.CORS)
-	s.router.Use(middleware.Metrics(metricsCollector))
-	s.router.Use(middleware.RateLimit(rateLimiter, "/health", "/metrics"))
+	mux := http.NewServeMux()
 
 	// Rutas públicas
-	s.router.HandleFunc("/health", handlers.Health).Methods("GET")
-	s.router.HandleFunc("/metrics", metricsHandler.Handle).Methods("GET")
+	mux.HandleFunc("GET /health", healthHandler.Liveness)
+	mux.HandleFunc("GET /health/liveness", healthHandler.Liveness)
+	mux.HandleFunc("GET /health/readiness", healthHandler.Readiness)
+	mux.HandleFunc("GET /metrics", metricsHandler.Handle)
 	// Prometheus scrape endpoint
-	s.router.Handle("/metrics/prometheus", promhttp.Handler()).Methods("GET")
-	s.router.HandleFunc("/login", authHandler.Login).Methods("POST")
+	mux.Handle("GET /metrics/prometheus", promhttp.Handler())
+	mux.HandleFunc("POST /login", authHandler.Login)
 
 	// Indexer control (internal)
-	s.router.HandleFunc("/internal/index/reindex", indexerHandler.Reindex).Methods("POST")
-	s.router.HandleFunc("/internal/index/start", indexerHandler.StartWatcher).Methods("POST")
-	s.router.HandleFunc("/internal/index/stop", indexerHandler.StopWatcher).Methods("POST")
-	s.router.HandleFunc("/internal/index/reset", indexerHandler.ResetState).Methods("POST")
-	s.router.HandleFunc("/api/search", searchHandler.Handle).Methods("POST")
+	mux.HandleFunc("POST /internal/index/reindex", indexerHandler.Reindex)
+	mux.HandleFunc("POST /internal/index/start", indexerHandler.StartWatcher)
+	mux.HandleFunc("POST /internal/index/stop", indexerHandler.StopWatcher)
+	mux.HandleFunc("POST /internal/index/reset", indexerHandler.ResetState)
+	mux.HandleFunc("POST /api/search", searchHandler.Handle)
 	// OpenAI-compatible endpoints
-	s.router.HandleFunc("/openai/v1/embeddings", openaiHandler.Embeddings).Methods("POST")
-	s.router.HandleFunc("/openai/v1/completions", openaiHandler.Completions).Methods("POST")
-	s.router.HandleFunc("/openai/v1/chat/completions", openaiHandler.ChatCompletions).Methods("POST")
+	mux.HandleFunc("POST /openai/v1/embeddings", openaiHandler.Embeddings)
+	mux.HandleFunc("POST /openai/v1/completions", openaiHandler.Completions)
+	mux.HandleFunc("POST /openai/v1/chat/completions", openaiHandler.ChatCompletions)
 
 	// Rutas protegidas con JWT
-	authMiddleware := middleware.NewAuthMiddleware(s.cfg.JWTSecret)
-	api := s.router.PathPrefix("/api").Subrouter()
-	api.Use(authMiddleware.JWT)
+	mux.Handle("POST /api/generate", authMiddleware.JWT(http.HandlerFunc(generateHandler.Handle)))
+	mux.Handle("POST /api/agent", authMiddleware.JWT(http.HandlerFunc(agentHandler.Handle)))
+	mux.Handle("POST /api/refactor", authMiddleware.JWT(http.HandlerFunc(repoHandler.Refactor)))
+	mux.Handle("GET /api/analyze-repo", authMiddleware.JWT(http.HandlerFunc(repoHandler.Analyze)))
+	mux.Handle("POST /api/v1/chat/completions", authMiddleware.JWT(http.HandlerFunc(chatHandler.Handle)))
 
-	api.HandleFunc("/generate", generateHandler.Handle).Methods("POST")
-	api.HandleFunc("/agent", agentHandler.Handle).Methods("POST")
-	api.HandleFunc("/refactor", repoHandler.Refactor).Methods("POST")
-	api.HandleFunc("/analyze-repo", repoHandler.Analyze).Methods("GET")
-	api.HandleFunc("/v1/chat/completions", chatHandler.Handle).Methods("POST")
+	s.router = chain(
+		mux,
+		middleware.RequestID,
+		middleware.Logging,
+		middleware.CORS,
+		middleware.Compress,
+		middleware.Metrics(metricsCollector),
+		middleware.RateLimit(rateLimiter, s.cfg, "/health", "/health/liveness", "/health/readiness", "/metrics"),
+	)
 }
 
 func (s *Server) Start() error {
-	srv := &http.Server{
+	s.httpServer = &http.Server{
 		Addr:         ":" + s.cfg.Port,
 		Handler:      s.router,
 		ReadTimeout:  15 * time.Second,
@@ -103,25 +125,41 @@ func (s *Server) Start() error {
 		IdleTimeout:  60 * time.Second,
 	}
 
-	go func() {
-		log.Printf("SaaS API en ejecución en el puerto :%s...\n", s.cfg.Port)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatal("error arrancando servidor:", err)
-		}
-	}()
-
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
-
-	log.Println("Apagando servidor...")
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	if err := srv.Shutdown(ctx); err != nil {
+	slog.Info("servidor iniciado", slog.String("port", s.cfg.Port))
+	if err := s.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		return err
 	}
-
-	log.Println("Servidor apagado correctamente")
 	return nil
+}
+
+func (s *Server) Shutdown(ctx context.Context) error {
+	if s.indexer != nil {
+		s.indexer.StopWatcher()
+	}
+	// No hay buffer de métricas pendiente para flush explícito en la implementación actual.
+	slog.Info("flush métricas completado")
+
+	if s.httpServer == nil {
+		return nil
+	}
+	return s.httpServer.Shutdown(ctx)
+}
+
+func (s *Server) Close() error {
+	if s.httpServer == nil {
+		return nil
+	}
+	return s.httpServer.Close()
+}
+
+func (s *Server) Handler() http.Handler {
+	return s.router
+}
+
+func chain(handler http.Handler, middlewares ...func(http.Handler) http.Handler) http.Handler {
+	wrapped := handler
+	for i := len(middlewares) - 1; i >= 0; i-- {
+		wrapped = middlewares[i](wrapped)
+	}
+	return wrapped
 }

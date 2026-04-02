@@ -11,23 +11,13 @@ import (
 )
 
 type OpenAIHandler struct {
-	ollama interface {
-		GetEmbedding(model, text string) ([]float64, error)
-	}
-	rag interface {
-		GenerateWithContext(prompt string) (string, error)
-		StreamGenerateWithContext(prompt string, onChunk func(string) error) error
-	}
+	ollama domain.OllamaClient
+	rag    domain.RAGEngine
 }
 
 func NewOpenAIHandler(
-	o interface {
-		GetEmbedding(model, text string) ([]float64, error)
-	},
-	r interface {
-		GenerateWithContext(prompt string) (string, error)
-		StreamGenerateWithContext(prompt string, onChunk func(string) error) error
-	},
+	o domain.OllamaClient,
+	r domain.RAGEngine,
 ) *OpenAIHandler {
 	return &OpenAIHandler{ollama: o, rag: r}
 }

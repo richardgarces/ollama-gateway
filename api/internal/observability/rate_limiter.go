@@ -1,6 +1,7 @@
 package observability
 
 import (
+	"math"
 	"sync"
 	"time"
 )
@@ -13,22 +14,36 @@ type visitor struct {
 
 type RateLimiter struct {
 	mu      sync.Mutex
-	limit   int
 	window  time.Duration
 	clients map[string]*visitor
 }
 
+type RateLimitDecision struct {
+	Allowed    bool
+	Limit      int
+	Remaining  int
+	ResetAt    time.Time
+	RetryAfter int
+}
+
 func NewRateLimiter(limit int, window time.Duration) *RateLimiter {
 	return &RateLimiter{
-		limit:   limit,
 		window:  window,
 		clients: make(map[string]*visitor),
 	}
 }
 
 func (l *RateLimiter) Allow(key string) bool {
-	if l == nil || l.limit <= 0 {
+	if l == nil {
 		return true
+	}
+	decision := l.Check(key, 1, true)
+	return decision.Allowed
+}
+
+func (l *RateLimiter) Check(key string, limit int, consume bool) RateLimitDecision {
+	if l == nil || limit <= 0 {
+		return RateLimitDecision{Allowed: true, Limit: limit}
 	}
 
 	now := time.Now()
@@ -44,21 +59,38 @@ func (l *RateLimiter) Allow(key string) bool {
 
 	state := l.clients[key]
 	if state == nil {
-		l.clients[key] = &visitor{count: 1, windowStart: now, lastSeen: now}
-		return true
+		state = &visitor{count: 0, windowStart: now, lastSeen: now}
+		l.clients[key] = state
 	}
 
 	state.lastSeen = now
 	if now.Sub(state.windowStart) >= l.window {
-		state.count = 1
+		state.count = 0
 		state.windowStart = now
-		return true
 	}
 
-	if state.count >= l.limit {
-		return false
+	allowed := state.count < limit
+	if allowed && consume {
+		state.count++
+	}
+	remaining := limit - state.count
+	if remaining < 0 {
+		remaining = 0
+	}
+	resetAt := state.windowStart.Add(l.window)
+	retryAfter := 0
+	if !allowed {
+		retryAfter = int(math.Ceil(time.Until(resetAt).Seconds()))
+		if retryAfter < 1 {
+			retryAfter = 1
+		}
 	}
 
-	state.count++
-	return true
+	return RateLimitDecision{
+		Allowed:    allowed,
+		Limit:      limit,
+		Remaining:  remaining,
+		ResetAt:    resetAt,
+		RetryAfter: retryAfter,
+	}
 }

@@ -1,16 +1,32 @@
 package services
 
+import (
+	"log/slog"
+
+	"ollama-gateway/internal/domain"
+	"ollama-gateway/pkg/cache"
+)
+
 type RAGService struct {
 	ollamaService *OllamaService
 	routerService *RouterService
 	qdrantService *QdrantService
+	logger        *slog.Logger
+	cache         cache.Cache
 }
 
-func NewRAGService(ollamaService *OllamaService, routerService *RouterService, qdrantService *QdrantService) *RAGService {
+var _ domain.RAGEngine = (*RAGService)(nil)
+
+func NewRAGService(ollamaService *OllamaService, routerService *RouterService, qdrantService *QdrantService, logger *slog.Logger, cacheBackend cache.Cache) *RAGService {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &RAGService{
 		ollamaService: ollamaService,
 		routerService: routerService,
 		qdrantService: qdrantService,
+		logger:        logger,
+		cache:         cacheBackend,
 	}
 }
 

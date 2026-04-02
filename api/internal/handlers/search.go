@@ -5,16 +5,16 @@ import (
 	"io"
 	"net/http"
 
-	"ollama-gateway/internal/services"
+	"ollama-gateway/internal/domain"
 	"ollama-gateway/pkg/httputil"
 )
 
 type SearchHandler struct {
-	ollama *services.OllamaService
-	qdrant *services.QdrantService
+	ollama domain.OllamaClient
+	qdrant domain.VectorStore
 }
 
-func NewSearchHandler(o *services.OllamaService, q *services.QdrantService) *SearchHandler {
+func NewSearchHandler(o domain.OllamaClient, q domain.VectorStore) *SearchHandler {
 	return &SearchHandler{ollama: o, qdrant: q}
 }
 
@@ -42,6 +42,27 @@ func (h *SearchHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+
+	if r.URL.Query().Get("page") != "" || r.URL.Query().Get("page_size") != "" {
+		rawItems, ok := res["result"].([]interface{})
+		if !ok {
+			httputil.WriteJSON(w, http.StatusOK, res)
+			return
+		}
+		page, pageSize := httputil.ParsePagination(r)
+		total := len(rawItems)
+		start := (page - 1) * pageSize
+		if start > total {
+			start = total
+		}
+		end := start + pageSize
+		if end > total {
+			end = total
+		}
+		httputil.WritePaginatedJSON(w, rawItems[start:end], total, page, pageSize)
+		return
+	}
+
 	httputil.WriteJSON(w, http.StatusOK, res)
 }
 

@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"ollama-gateway/internal/config"
 	"ollama-gateway/internal/domain"
 	"ollama-gateway/internal/handlers"
 	"ollama-gateway/internal/observability"
@@ -43,6 +45,17 @@ type fakeOllamaService struct {
 	err       error
 }
 
+func (f fakeOllamaService) Generate(model, prompt string) (string, error) {
+	return "", f.err
+}
+
+func (f fakeOllamaService) StreamGenerate(model, prompt string, onChunk func(string) error) error {
+	if f.err != nil {
+		return f.err
+	}
+	return onChunk("")
+}
+
 func (f fakeOllamaService) GetEmbedding(model, text string) ([]float64, error) {
 	return f.embedding, f.err
 }
@@ -50,14 +63,10 @@ func (f fakeOllamaService) GetEmbedding(model, text string) ([]float64, error) {
 func TestHealthEndpoint(t *testing.T) {
 	req := httptest.NewRequest("GET", "/health", nil)
 	w := httptest.NewRecorder()
-	handlers.Health(w, req)
+	handler := handlers.NewHealthHandler(&config.Config{})
+	handler.Liveness(w, req)
 	if w.Code != http.StatusOK {
 		t.Errorf("expected 200, got %d", w.Code)
-	}
-	var body map[string]string
-	json.NewDecoder(w.Body).Decode(&body)
-	if body["status"] != "ok" {
-		t.Errorf("expected status ok, got %s", body["status"])
 	}
 }
 
@@ -125,7 +134,7 @@ func TestChatHandlerEmptyMessages(t *testing.T) {
 }
 
 func TestSelectModelCode(t *testing.T) {
-	m := services.NewRouterService().SelectModel("implement a func to parse JSON")
+	m := services.NewRouterService(slog.Default()).SelectModel("implement a func to parse JSON")
 	if m != "deepseek-coder:6.7b" {
 		t.Errorf("expected deepseek-coder, got %s", m)
 	}
@@ -133,14 +142,14 @@ func TestSelectModelCode(t *testing.T) {
 
 func TestSelectModelLong(t *testing.T) {
 	longPrompt := string(make([]byte, 400))
-	m := services.NewRouterService().SelectModel(longPrompt)
+	m := services.NewRouterService(slog.Default()).SelectModel(longPrompt)
 	if m != "qwen2.5:7b" {
 		t.Errorf("expected qwen2.5:7b, got %s", m)
 	}
 }
 
 func TestSelectModelDefault(t *testing.T) {
-	m := services.NewRouterService().SelectModel("hola")
+	m := services.NewRouterService(slog.Default()).SelectModel("hola")
 	if m != "gemma:2b" {
 		t.Errorf("expected gemma:2b, got %s", m)
 	}

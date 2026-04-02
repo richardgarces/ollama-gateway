@@ -1,6 +1,7 @@
 package services
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,12 +11,17 @@ import (
 type RepoService struct {
 	ollamaService *OllamaService
 	repoRoot      string
+	logger        *slog.Logger
 }
 
-func NewRepoService(ollamaService *OllamaService, repoRoot string) *RepoService {
+func NewRepoService(ollamaService *OllamaService, repoRoot string, logger *slog.Logger) *RepoService {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &RepoService{
 		ollamaService: ollamaService,
 		repoRoot:      repoRoot,
+		logger:        logger,
 	}
 }
 

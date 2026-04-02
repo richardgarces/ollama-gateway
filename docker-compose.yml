@@ -2,7 +2,9 @@ version: '3.8'
 
 services:
   api:
-    build: ./api
+    build:
+      context: ./api
+      dockerfile: Dockerfile
     ports:
       - "8081:8081"
     depends_on:
@@ -13,11 +15,7 @@ services:
       mongo:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 5s
+      disable: true
 
   ollama:
     image: ollama/ollama

@@ -8,14 +8,14 @@ import (
 )
 
 type MetricsHandler struct {
-	collector interface {
-		Snapshot() observability.MetricsSnapshot
-	}
+	collector metricsCollector
 }
 
-func NewMetricsHandler(collector interface {
+type metricsCollector interface {
 	Snapshot() observability.MetricsSnapshot
-}) *MetricsHandler {
+}
+
+func NewMetricsHandler(collector metricsCollector) *MetricsHandler {
 	return &MetricsHandler{collector: collector}
 }
 

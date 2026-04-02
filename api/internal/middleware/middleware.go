@@ -1,7 +1,7 @@
 package middleware
 
 import (
-	"log"
+	"log/slog"
 	"net/http"
 	"time"
 )
@@ -23,7 +23,13 @@ func Logging(next http.Handler) http.Handler {
 
 		next.ServeHTTP(rec, r)
 
-		log.Printf("request_id=%s method=%s path=%s status=%d duration=%s", RequestIDFromContext(r.Context()), r.Method, r.URL.Path, rec.statusCode, time.Since(start))
+		slog.Info("http request",
+			slog.String("request_id", RequestIDFromContext(r.Context())),
+			slog.String("method", r.Method),
+			slog.String("path", r.URL.Path),
+			slog.Int("status", rec.statusCode),
+			slog.Duration("latency", time.Since(start)),
+		)
 	})
 }
 

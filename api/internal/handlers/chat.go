@@ -9,14 +9,10 @@ import (
 )
 
 type ChatHandler struct {
-	ragService interface {
-		GenerateWithContext(prompt string) (string, error)
-	}
+	ragService domain.RAGEngine
 }
 
-func NewChatHandler(ragService interface {
-	GenerateWithContext(prompt string) (string, error)
-}) *ChatHandler {
+func NewChatHandler(ragService domain.RAGEngine) *ChatHandler {
 	return &ChatHandler{ragService: ragService}
 }
 
@@ -38,18 +34,11 @@ func (h *ChatHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.Stream {
-		streamer, ok := h.ragService.(interface {
-			StreamGenerateWithContext(prompt string, onChunk func(string) error) error
-		})
-		if !ok {
-			httputil.WriteError(w, http.StatusNotImplemented, "streaming no soportado")
-			return
-		}
 		if err := httputil.WriteSSEHeaders(w); err != nil {
 			httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		if err := streamer.StreamGenerateWithContext(prompt, func(chunk string) error {
+		if err := h.ragService.StreamGenerateWithContext(prompt, func(chunk string) error {
 			return httputil.WriteSSEData(w, map[string]interface{}{
 				"choices": []map[string]interface{}{{
 					"delta": map[string]string{"role": "assistant", "content": chunk},

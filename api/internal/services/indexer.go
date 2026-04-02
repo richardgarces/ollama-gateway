@@ -7,10 +7,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"ollama-gateway/internal/domain"
 
 	"github.com/fsnotify/fsnotify"
 	ignorepkg "github.com/sabhiram/go-gitignore"
@@ -33,10 +36,16 @@ type IndexerService struct {
 	// fileHashes stores last seen hash to skip unchanged files (in-memory)
 	fileHashes map[string]string
 	// gitignore matcher
-	ign *ignorepkg.GitIgnore
+	ign    *ignorepkg.GitIgnore
+	logger *slog.Logger
 }
 
-func NewIndexerService(repoRoot string, statePath string, ollama *OllamaService, qdrant *QdrantService) (*IndexerService, error) {
+var _ domain.Indexer = (*IndexerService)(nil)
+
+func NewIndexerService(repoRoot string, statePath string, ollama *OllamaService, qdrant *QdrantService, logger *slog.Logger) (*IndexerService, error) {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	w, err := fsnotify.NewWatcher()
 	if err != nil {
 		return nil, err
@@ -49,6 +58,7 @@ func NewIndexerService(repoRoot string, statePath string, ollama *OllamaService,
 		watcher:    w,
 		stop:       make(chan struct{}),
 		fileHashes: make(map[string]string),
+		logger:     logger,
 	}
 	// try load .gitignore
 	gi := filepath.Join(repoRoot, ".gitignore")

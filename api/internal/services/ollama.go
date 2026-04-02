@@ -2,107 +2,50 @@ package services
 
 import (
 	"bytes"
-	"container/list"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
-	"sync"
 	"time"
 
 	"ollama-gateway/internal/config"
 	"ollama-gateway/internal/domain"
+	"ollama-gateway/pkg/cache"
+	"ollama-gateway/pkg/httpclient"
 )
 
-type cacheItem struct {
-	key       string
-	value     []float64
-	timestamp time.Time
-}
-
-// EmbeddingCache is an LRU cache with TTL for embeddings.
-type EmbeddingCache struct {
-	mu         sync.RWMutex
-	items      map[string]*list.Element
-	order      *list.List // front is most recent
-	ttl        time.Duration
-	maxEntries int
-}
-
-func NewEmbeddingCache(ttl time.Duration, maxEntries int) *EmbeddingCache {
-	return &EmbeddingCache{
-		items:      make(map[string]*list.Element),
-		order:      list.New(),
-		ttl:        ttl,
-		maxEntries: maxEntries,
-	}
-}
-
-func (c *EmbeddingCache) Get(key string) ([]float64, bool) {
-	c.mu.RLock()
-	el, ok := c.items[key]
-	c.mu.RUnlock()
-	if !ok {
-		return nil, false
-	}
-
-	item := el.Value.(*cacheItem)
-	if time.Since(item.timestamp) > c.ttl {
-		c.mu.Lock()
-		c.order.Remove(el)
-		delete(c.items, key)
-		c.mu.Unlock()
-		return nil, false
-	}
-
-	// update recency
-	c.mu.Lock()
-	c.order.MoveToFront(el)
-	c.mu.Unlock()
-
-	return append([]float64(nil), item.value...), true
-}
-
-func (c *EmbeddingCache) Set(key string, value []float64) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if el, ok := c.items[key]; ok {
-		el.Value.(*cacheItem).value = append([]float64(nil), value...)
-		el.Value.(*cacheItem).timestamp = time.Now()
-		c.order.MoveToFront(el)
-		return
-	}
-
-	item := &cacheItem{key: key, value: append([]float64(nil), value...), timestamp: time.Now()}
-	el := c.order.PushFront(item)
-	c.items[key] = el
-
-	if c.maxEntries > 0 && c.order.Len() > c.maxEntries {
-		back := c.order.Back()
-		if back != nil {
-			it := back.Value.(*cacheItem)
-			delete(c.items, it.key)
-			c.order.Remove(back)
-		}
-	}
-}
-
 type OllamaService struct {
-	baseURL string
-	client  *http.Client
-	cache   *EmbeddingCache
+	baseURL      string
+	client       *http.Client
+	cache        cache.Cache
+	cacheTTL     time.Duration
+	maxCacheSize int
+	logger       *slog.Logger
 }
 
-func NewOllamaService(cfg *config.Config) *OllamaService {
+var _ domain.OllamaClient = (*OllamaService)(nil)
+
+func NewOllamaService(cfg *config.Config, logger *slog.Logger, embeddingCache cache.Cache) *OllamaService {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	if embeddingCache == nil {
+		embeddingCache = cache.NewMemory()
+	}
 	ttl := time.Duration(cfg.EmbeddingCacheTTLSeconds) * time.Second
 	max := cfg.EmbeddingCacheMaxEntries
 	return &OllamaService{
 		baseURL: cfg.OllamaURL,
-		client: &http.Client{
-			Timeout: 120 * time.Second,
-		},
-		cache: NewEmbeddingCache(ttl, max),
+		client: httpclient.NewResilientClient(httpclient.Options{
+			Timeout:    time.Duration(cfg.HTTPTimeoutSeconds) * time.Second,
+			MaxRetries: cfg.HTTPMaxRetries,
+		}),
+		cache:        embeddingCache,
+		cacheTTL:     ttl,
+		maxCacheSize: max,
+		logger:       logger,
 	}
 }
 
@@ -185,8 +128,15 @@ func (s *OllamaService) StreamGenerate(model, prompt string, onChunk func(string
 
 func (s *OllamaService) GetEmbedding(model, text string) ([]float64, error) {
 	cacheKey := model + ":" + text
-	if v, ok := s.cache.Get(cacheKey); ok {
-		return v, nil
+	if raw, err := s.cache.Get(cacheKey); err == nil {
+		var embedding []float64
+		if err := json.Unmarshal(raw, &embedding); err == nil {
+			return embedding, nil
+		}
+		s.logger.Warn("embedding cache decode falló", slog.String("service", "ollama"), slog.Any("error", err))
+		_ = s.cache.Delete(cacheKey)
+	} else if !errors.Is(err, cache.ErrCacheMiss) {
+		s.logger.Warn("embedding cache read falló", slog.String("service", "ollama"), slog.Any("error", err))
 	}
 
 	reqBody := map[string]interface{}{
@@ -216,7 +166,11 @@ func (s *OllamaService) GetEmbedding(model, text string) ([]float64, error) {
 		return nil, fmt.Errorf("ollama embedding decode error: %w", err)
 	}
 
-	s.cache.Set(cacheKey, result.Embedding)
+	if raw, err := json.Marshal(result.Embedding); err == nil {
+		if err := s.cache.Set(cacheKey, raw, s.cacheTTL); err != nil {
+			s.logger.Warn("embedding cache write falló", slog.String("service", "ollama"), slog.Any("error", err))
+		}
+	}
 
 	return result.Embedding, nil
 }

@@ -1,20 +1,26 @@
 package services
 
 import (
+	"log/slog"
 	"strings"
 )
 
 type RouterService struct {
 	codeKeywords []string
+	logger       *slog.Logger
 }
 
-func NewRouterService() *RouterService {
+func NewRouterService(logger *slog.Logger) *RouterService {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &RouterService{
 		codeKeywords: []string{
 			"func ", "package ", "golang", "go code", "implement", "refactor",
 			"struct ", "interface ", "error handling", "goroutine", "channel",
 			"import ", "return ", "if err != nil", "fmt.", "http.",
 		},
+		logger: logger,
 	}
 }
 

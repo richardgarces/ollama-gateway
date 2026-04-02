@@ -9,14 +9,10 @@ import (
 )
 
 type AgentHandler struct {
-	agentService interface {
-		Run(prompt string) string
-	}
+	agentService domain.AgentRunner
 }
 
-func NewAgentHandler(agentService interface {
-	Run(prompt string) string
-}) *AgentHandler {
+func NewAgentHandler(agentService domain.AgentRunner) *AgentHandler {
 	return &AgentHandler{agentService: agentService}
 }
 
