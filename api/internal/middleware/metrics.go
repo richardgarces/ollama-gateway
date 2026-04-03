@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"time"
 
-	"ollama-gateway/internal/observability"
+	"ollama-gateway/internal/utils/observability"
 )
 
 func Metrics(collector *observability.MetricsCollector) func(http.Handler) http.Handler {

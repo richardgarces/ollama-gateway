@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"time"
 
-	"ollama-gateway/internal/observability"
+	"ollama-gateway/internal/utils/observability"
 )
 
 type statusRecorder struct {

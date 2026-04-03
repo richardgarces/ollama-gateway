@@ -2,7 +2,7 @@
 
 Esta guia deja el gateway funcionando de forma reproducible en desarrollo, con dos topologias:
 
-1. Stack local unificado: API + Qdrant + Mongo en [docker-compose.yml](docker-compose.yml), Ollama separado en [docker-compose.ollama.yml](docker-compose.ollama.yml).
+1. Stack local desacoplado por servicio: API, Ollama, Qdrant y Mongo con compose separados.
 2. Topologia distribuida: API en una maquina y Ollama/Qdrant/Mongo en otras.
 
 ## 1. Requisitos
@@ -73,10 +73,22 @@ curl -fsS http://localhost:11434/ >/dev/null && echo "ollama ok"
 curl -fsS http://localhost:3000/ >/dev/null && echo "webui ok"
 ```
 
-### 4.2 Levantar API + Qdrant + Mongo
+### 4.2 Levantar Qdrant
 
 ```bash
-docker compose -f docker-compose.yml up -d
+docker compose -f docker-compose.qdrant.yml up -d
+```
+
+### 4.3 Levantar Mongo
+
+```bash
+docker compose -f docker-compose.mongo.yml up -d
+```
+
+### 4.4 Levantar API
+
+```bash
+docker compose -f docker-compose.api.yml up -d
 ```
 
 Verificacion:
@@ -87,6 +99,13 @@ curl -fsS http://localhost:6333/ | cat
 ```
 
 Nota: en [docker-compose.yml](docker-compose.yml) la API usa por defecto `OLLAMA_URL=http://host.docker.internal:11434`. Si Ollama corre remoto, exporta `OLLAMA_URL` antes de levantar la API.
+
+Compose separados disponibles:
+
+- [docker-compose.api.yml](docker-compose.api.yml)
+- [docker-compose.ollama.yml](docker-compose.ollama.yml)
+- [docker-compose.qdrant.yml](docker-compose.qdrant.yml)
+- [docker-compose.mongo.yml](docker-compose.mongo.yml)
 
 ## 5. Ejecutar API sin Docker (modo desarrollo)
 

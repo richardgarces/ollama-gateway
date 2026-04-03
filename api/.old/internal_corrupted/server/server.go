@@ -12,7 +12,7 @@ import (
 	"ollama-gateway/internal/config"
 	"ollama-gateway/internal/handlers"
 	"ollama-gateway/internal/middleware"
-	"ollama-gateway/internal/services"
+	"ollama-gateway/internal/usecase/services"
 
 	"github.com/gorilla/mux"
 )

@@ -1,0 +1,14 @@
+services:
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    ports:
+      - "8081:8081"
+    environment:
+      - OLLAMA_URL=${OLLAMA_URL:-http://host.docker.internal:11434}
+      - QDRANT_URL=${QDRANT_URL:-http://host.docker.internal:6333}
+      - MONGO_URI=${MONGO_URI:-mongodb://admin:${MONGO_PASSWORD:-changeme}@host.docker.internal:27017}
+      - JWT_SECRET=${JWT_SECRET:-changeme-local-secret}
+    healthcheck:
+      disable: true

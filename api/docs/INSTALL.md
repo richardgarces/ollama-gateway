@@ -4,13 +4,17 @@ Objetivo: dejar el gateway funcionando con Ollama desacoplado de la API.
 
 Topologia recomendada:
 
-- Compose 1: API + Qdrant + Mongo.
-- Compose 2: Ollama + WebUI.
+- Compose API: [docker-compose.api.yml](../../docker-compose.api.yml).
+- Compose Ollama/WebUI: [docker-compose.ollama.yml](../../docker-compose.ollama.yml).
+- Compose Qdrant: [docker-compose.qdrant.yml](../../docker-compose.qdrant.yml).
+- Compose Mongo: [docker-compose.mongo.yml](../../docker-compose.mongo.yml).
 
 Archivos relevantes:
 
-- [docker-compose.yml](../../docker-compose.yml)
 - [docker-compose.ollama.yml](../../docker-compose.ollama.yml)
+- [docker-compose.api.yml](../../docker-compose.api.yml)
+- [docker-compose.qdrant.yml](../../docker-compose.qdrant.yml)
+- [docker-compose.mongo.yml](../../docker-compose.mongo.yml)
 - [ENV_VARS.md](ENV_VARS.md)
 
 ## Opcion A: todo en una misma maquina
@@ -22,10 +26,22 @@ cd <repo-root>
 docker compose -f docker-compose.ollama.yml up -d
 ```
 
-2. Levantar API/Qdrant/Mongo:
+2. Levantar Qdrant:
 
 ```bash
-docker compose -f docker-compose.yml up -d
+docker compose -f docker-compose.qdrant.yml up -d
+```
+
+3. Levantar Mongo:
+
+```bash
+docker compose -f docker-compose.mongo.yml up -d
+```
+
+4. Levantar API:
+
+```bash
+docker compose -f docker-compose.api.yml up -d
 ```
 
 3. Verificar:

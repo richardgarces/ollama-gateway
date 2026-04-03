@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"time"
 
-	"ollama-gateway/internal/domain"
+	"ollama-gateway/internal/core/domain"
 	"ollama-gateway/pkg/httputil"
 
 	"github.com/golang-jwt/jwt/v5"

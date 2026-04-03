@@ -23,16 +23,22 @@ clean: ## Limpiar archivos generados
 	rm -rf api/bin api/coverage.*
 
 docker-build: ## Construir imágenes Docker
-	docker-compose build
+	docker compose -f docker-compose.api.yml build
 
 docker-up: ## Levantar servicios con Docker Compose
-	docker-compose up -d
+	docker compose -f docker-compose.ollama.yml up -d
+	docker compose -f docker-compose.qdrant.yml up -d
+	docker compose -f docker-compose.mongo.yml up -d
+	docker compose -f docker-compose.api.yml up -d
 
 docker-down: ## Detener servicios Docker
-	docker-compose down
+	docker compose -f docker-compose.api.yml down
+	docker compose -f docker-compose.mongo.yml down
+	docker compose -f docker-compose.qdrant.yml down
+	docker compose -f docker-compose.ollama.yml down
 
 docker-logs: ## Ver logs de los servicios
-	docker-compose logs -f
+	docker compose -f docker-compose.api.yml logs -f
 
 lint: ## Ejecutar go vet y otros linters
 	cd api && go vet ./...

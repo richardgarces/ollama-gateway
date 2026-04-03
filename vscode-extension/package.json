@@ -12,6 +12,11 @@
     "onCommand:copilot-local.debugError",
     "onCommand:copilot-local.translateSelection",
     "onCommand:copilot-local.addTests",
+    "onCommand:copilot-local.explainSelection",
+    "onCommand:copilot-local.refactorSelection",
+    "onCommand:copilot-local.fixErrors",
+    "onCommand:copilot-local.reindex",
+    "onCommand:copilot-local.showStats",
     "onCommand:copilot-local.joinSession",
     "onCommand:copilot-local.commitMessage"
   ],
@@ -39,6 +44,26 @@
         "title": "Copilot Local: Add Tests"
       },
       {
+        "command": "copilot-local.explainSelection",
+        "title": "Copilot Local: Explain Selection"
+      },
+      {
+        "command": "copilot-local.refactorSelection",
+        "title": "Copilot Local: Refactor Selection"
+      },
+      {
+        "command": "copilot-local.fixErrors",
+        "title": "Copilot Local: Fix Errors In Selection"
+      },
+      {
+        "command": "copilot-local.reindex",
+        "title": "Copilot Local: Reindex Repository"
+      },
+      {
+        "command": "copilot-local.showStats",
+        "title": "Copilot Local: Show Usage Stats"
+      },
+      {
         "command": "copilot-local.joinSession",
         "title": "Copilot Local: Join Shared Session"
       },
@@ -58,8 +83,64 @@
         "command": "copilot-local.openChat",
         "key": "ctrl+shift+k",
         "mac": "cmd+shift+k"
+      },
+      {
+        "command": "copilot-local.explainSelection",
+        "key": "ctrl+shift+e",
+        "mac": "cmd+shift+e",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "copilot-local.refactorSelection",
+        "key": "ctrl+shift+r",
+        "mac": "cmd+shift+r",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "copilot-local.addTests",
+        "key": "ctrl+shift+t",
+        "mac": "cmd+shift+t",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "copilot-local.fixErrors",
+        "key": "ctrl+shift+f",
+        "mac": "cmd+shift+f",
+        "when": "editorTextFocus"
       }
     ],
+    "submenus": [
+      {
+        "id": "copilotLocal.submenu",
+        "label": "Copilot Local"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "submenu": "copilotLocal.submenu",
+          "group": "navigation"
+        }
+      ],
+      "copilotLocal.submenu": [
+        {
+          "command": "copilot-local.explainSelection",
+          "group": "1_main"
+        },
+        {
+          "command": "copilot-local.refactorSelection",
+          "group": "1_main"
+        },
+        {
+          "command": "copilot-local.addTests",
+          "group": "1_main"
+        },
+        {
+          "command": "copilot-local.fixErrors",
+          "group": "1_main"
+        }
+      ]
+    },
     "configuration": {
       "title": "Copilot Local",
       "properties": {
@@ -82,6 +163,16 @@
           "type": "string",
           "default": "",
           "description": "JWT token for authenticated endpoints (optional)"
+        },
+        "copilotLocal.inlineCompletions": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable inline ghost text completions"
+        },
+        "copilotLocal.chatFontSize": {
+          "type": "number",
+          "default": 13,
+          "description": "Font size used in chat panel"
         }
       }
     }

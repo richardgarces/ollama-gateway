@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	"ollama-gateway/internal/domain"
+	"ollama-gateway/internal/core/domain"
 )
 
 type OllamaService struct {

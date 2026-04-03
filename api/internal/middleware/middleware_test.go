@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"ollama-gateway/internal/config"
-	"ollama-gateway/internal/observability"
+	"ollama-gateway/internal/utils/observability"
 
 	"github.com/golang-jwt/jwt/v5"
 )

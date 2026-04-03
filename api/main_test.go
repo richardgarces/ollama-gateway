@@ -11,10 +11,14 @@ import (
 	"testing"
 
 	"ollama-gateway/internal/config"
-	"ollama-gateway/internal/domain"
-	"ollama-gateway/internal/handlers"
-	"ollama-gateway/internal/observability"
-	"ollama-gateway/internal/services"
+	agenttransport "ollama-gateway/internal/function/agent/transport"
+	chattransport "ollama-gateway/internal/function/chat/transport"
+	"ollama-gateway/internal/function/core/domain"
+	coreservice "ollama-gateway/internal/function/core"
+	generatetransport "ollama-gateway/internal/function/generate/transport"
+	healthtransport "ollama-gateway/internal/function/health/transport"
+	openaitransport "ollama-gateway/internal/function/openai/transport"
+	"ollama-gateway/internal/utils/observability"
 	"ollama-gateway/pkg/httputil"
 )
 
@@ -63,7 +67,7 @@ func (f fakeOllamaService) GetEmbedding(model, text string) ([]float64, error) {
 func TestHealthEndpoint(t *testing.T) {
 	req := httptest.NewRequest("GET", "/health", nil)
 	w := httptest.NewRecorder()
-	handler := handlers.NewHealthHandler(&config.Config{})
+	handler := healthtransport.NewHandler(&config.Config{})
 	handler.Liveness(w, req)
 	if w.Code != http.StatusOK {
 		t.Errorf("expected 200, got %d", w.Code)
@@ -73,7 +77,7 @@ func TestHealthEndpoint(t *testing.T) {
 func TestGenerateHandlerBadBody(t *testing.T) {
 	req := httptest.NewRequest("POST", "/api/generate", bytes.NewBufferString("not json"))
 	w := httptest.NewRecorder()
-	handler := handlers.NewGenerateHandler(fakeRAGService{})
+	handler := generatetransport.NewHandler(fakeRAGService{})
 	handler.Handle(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", w.Code)
@@ -84,7 +88,7 @@ func TestGenerateHandlerEmptyPrompt(t *testing.T) {
 	body, _ := json.Marshal(map[string]string{"prompt": ""})
 	req := httptest.NewRequest("POST", "/api/generate", bytes.NewBuffer(body))
 	w := httptest.NewRecorder()
-	handler := handlers.NewGenerateHandler(fakeRAGService{})
+	handler := generatetransport.NewHandler(fakeRAGService{})
 	handler.Handle(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", w.Code)
@@ -94,7 +98,7 @@ func TestGenerateHandlerEmptyPrompt(t *testing.T) {
 func TestAgentHandlerBadBody(t *testing.T) {
 	req := httptest.NewRequest("POST", "/api/agent", bytes.NewBufferString("{invalid"))
 	w := httptest.NewRecorder()
-	handler := handlers.NewAgentHandler(fakeAgentService{})
+	handler := agenttransport.NewHandler(fakeAgentService{})
 	handler.Handle(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", w.Code)
@@ -105,7 +109,7 @@ func TestAgentHandlerEmptyPrompt(t *testing.T) {
 	body, _ := json.Marshal(map[string]string{"input": ""})
 	req := httptest.NewRequest("POST", "/api/agent", bytes.NewBuffer(body))
 	w := httptest.NewRecorder()
-	handler := handlers.NewAgentHandler(fakeAgentService{})
+	handler := agenttransport.NewHandler(fakeAgentService{})
 	handler.Handle(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", w.Code)
@@ -115,7 +119,7 @@ func TestAgentHandlerEmptyPrompt(t *testing.T) {
 func TestChatHandlerBadBody(t *testing.T) {
 	req := httptest.NewRequest("POST", "/api/v1/chat/completions", bytes.NewBufferString("nope"))
 	w := httptest.NewRecorder()
-	handler := handlers.NewChatHandler(fakeRAGService{})
+	handler := chattransport.NewHandler(fakeRAGService{})
 	handler.Handle(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", w.Code)
@@ -126,7 +130,7 @@ func TestChatHandlerEmptyMessages(t *testing.T) {
 	body, _ := json.Marshal(map[string]any{"messages": []map[string]string{}})
 	req := httptest.NewRequest("POST", "/api/v1/chat/completions", bytes.NewBuffer(body))
 	w := httptest.NewRecorder()
-	handler := handlers.NewChatHandler(fakeRAGService{})
+	handler := chattransport.NewHandler(fakeRAGService{})
 	handler.Handle(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", w.Code)
@@ -134,7 +138,7 @@ func TestChatHandlerEmptyMessages(t *testing.T) {
 }
 
 func TestSelectModelCode(t *testing.T) {
-	m := services.NewRouterService(nil, nil, slog.Default()).SelectModel("implement a func to parse JSON")
+	m := coreservice.NewRouterService(nil, nil, slog.Default()).SelectModel("implement a func to parse JSON")
 	if m != "deepseek-coder:6.7b" {
 		t.Errorf("expected deepseek-coder, got %s", m)
 	}
@@ -142,14 +146,14 @@ func TestSelectModelCode(t *testing.T) {
 
 func TestSelectModelLong(t *testing.T) {
 	longPrompt := string(make([]byte, 400))
-	m := services.NewRouterService(nil, nil, slog.Default()).SelectModel(longPrompt)
+	m := coreservice.NewRouterService(nil, nil, slog.Default()).SelectModel(longPrompt)
 	if m != "qwen2.5:7b" {
 		t.Errorf("expected qwen2.5:7b, got %s", m)
 	}
 }
 
 func TestSelectModelDefault(t *testing.T) {
-	m := services.NewRouterService(nil, nil, slog.Default()).SelectModel("hola")
+	m := coreservice.NewRouterService(nil, nil, slog.Default()).SelectModel("hola")
 	if m != "gemma:2b" {
 		t.Errorf("expected gemma:2b, got %s", m)
 	}
@@ -190,7 +194,7 @@ func TestGenerateHandlerServiceError(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/generate", bytes.NewBuffer(body))
 	w := httptest.NewRecorder()
 
-	handler := handlers.NewGenerateHandler(fakeRAGService{err: errors.New("fallo")})
+	handler := generatetransport.NewHandler(fakeRAGService{err: errors.New("fallo")})
 	handler.Handle(w, req)
 
 	if w.Code != http.StatusInternalServerError {
@@ -199,7 +203,7 @@ func TestGenerateHandlerServiceError(t *testing.T) {
 }
 
 func TestOpenAIChatCompletions(t *testing.T) {
-	handler := handlers.NewOpenAIHandler(fakeOllamaService{}, fakeRAGService{result: "respuesta"}, nil, nil)
+	handler := openaitransport.NewHandler(fakeOllamaService{}, fakeRAGService{result: "respuesta"}, nil, nil)
 	body, _ := json.Marshal(map[string]any{
 		"model":    "local-rag",
 		"messages": []domain.Message{{Role: "user", Content: "hola"}},
@@ -226,7 +230,7 @@ func TestOpenAIChatCompletions(t *testing.T) {
 }
 
 func TestOpenAIChatCompletionsStream(t *testing.T) {
-	handler := handlers.NewOpenAIHandler(fakeOllamaService{}, fakeRAGService{result: "respuesta"}, nil, nil)
+	handler := openaitransport.NewHandler(fakeOllamaService{}, fakeRAGService{result: "respuesta"}, nil, nil)
 	body, _ := json.Marshal(map[string]any{
 		"model":    "local-rag",
 		"stream":   true,

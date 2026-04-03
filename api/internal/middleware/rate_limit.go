@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"ollama-gateway/internal/config"
-	"ollama-gateway/internal/observability"
+	"ollama-gateway/internal/utils/observability"
 	"ollama-gateway/pkg/httputil"
 )
 

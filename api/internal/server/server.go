@@ -7,11 +7,53 @@ import (
 	"time"
 
 	"ollama-gateway/internal/config"
-	"ollama-gateway/internal/domain"
-	"ollama-gateway/internal/handlers"
+	agentservice "ollama-gateway/internal/function/agent"
+	agenttransport "ollama-gateway/internal/function/agent/transport"
+	apiexplorertransport "ollama-gateway/internal/function/api_explorer/transport"
+	architectservice "ollama-gateway/internal/function/architect"
+	architecttransport "ollama-gateway/internal/function/architect/transport"
+	authtransport "ollama-gateway/internal/function/auth/transport"
+	chattransport "ollama-gateway/internal/function/chat/transport"
+	cicdservice "ollama-gateway/internal/function/cicd"
+	cicdtransport "ollama-gateway/internal/function/cicd/transport"
+	commitgenservice "ollama-gateway/internal/function/commitgen"
+	commitgentransport "ollama-gateway/internal/function/commitgen/transport"
+	coreservice "ollama-gateway/internal/function/core"
+	"ollama-gateway/internal/function/core/domain"
+	dashboardtransport "ollama-gateway/internal/function/dashboard/transport"
+	debugservice "ollama-gateway/internal/function/debug"
+	debugtransport "ollama-gateway/internal/function/debug/transport"
+	docgenservice "ollama-gateway/internal/function/docgen"
+	docgentransport "ollama-gateway/internal/function/docgen/transport"
+	generatetransport "ollama-gateway/internal/function/generate/transport"
+	healthtransport "ollama-gateway/internal/function/health/transport"
+	indexerservice "ollama-gateway/internal/function/indexer"
+	indexertransport "ollama-gateway/internal/function/indexer/transport"
+	metricstransport "ollama-gateway/internal/function/metrics/transport"
+	modelstransport "ollama-gateway/internal/function/models/transport"
+	openaitransport "ollama-gateway/internal/function/openai/transport"
+	patchservice "ollama-gateway/internal/function/patch"
+	patchtransport "ollama-gateway/internal/function/patch/transport"
+	profileservice "ollama-gateway/internal/function/profile"
+	profiletransport "ollama-gateway/internal/function/profile/transport"
+	reposervice "ollama-gateway/internal/function/repo"
+	repotransport "ollama-gateway/internal/function/repo/transport"
+	reviewservice "ollama-gateway/internal/function/review"
+	reviewtransport "ollama-gateway/internal/function/review/transport"
+	searchtransport "ollama-gateway/internal/function/search/transport"
+	securityservice "ollama-gateway/internal/function/security"
+	securitytransport "ollama-gateway/internal/function/security/transport"
+	sessionservice "ollama-gateway/internal/function/session"
+	sessiontransport "ollama-gateway/internal/function/session/transport"
+	sqlgenservice "ollama-gateway/internal/function/sqlgen"
+	sqlgentransport "ollama-gateway/internal/function/sqlgen/transport"
+	testgenservice "ollama-gateway/internal/function/testgen"
+	testgentransport "ollama-gateway/internal/function/testgen/transport"
+	translatorservice "ollama-gateway/internal/function/translator"
+	translatortransport "ollama-gateway/internal/function/translator/transport"
+	wstransport "ollama-gateway/internal/function/ws/transport"
 	"ollama-gateway/internal/middleware"
-	"ollama-gateway/internal/observability"
-	"ollama-gateway/internal/services"
+	"ollama-gateway/internal/utils/observability"
 	"ollama-gateway/pkg/cache"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -23,8 +65,8 @@ type Server struct {
 	httpServer          *http.Server
 	indexer             domain.Indexer
 	cache               cache.Cache
-	conversationService *services.ConversationService
-	profileService      *services.ProfileService
+	conversationService *coreservice.ConversationService
+	profileService      *profileservice.Service
 }
 
 type RouteDefinition = domain.RouteDefinition
@@ -35,6 +77,7 @@ func GetRouteDefinitions() []RouteDefinition {
 		{Method: "GET", Path: "/health/liveness", Description: "Liveness detail", ExampleBody: "", Protected: false},
 		{Method: "GET", Path: "/health/readiness", Description: "Readiness probe", ExampleBody: "", Protected: false},
 		{Method: "GET", Path: "/metrics", Description: "Metricas JSON internas", ExampleBody: "", Protected: false},
+		{Method: "GET", Path: "/api/models", Description: "Modelos disponibles de Ollama", ExampleBody: "", Protected: false},
 		{Method: "GET", Path: "/metrics/prometheus", Description: "Metricas Prometheus", ExampleBody: "", Protected: false},
 		{Method: "POST", Path: "/login", Description: "Autenticacion JWT", ExampleBody: "{\n  \"username\": \"admin\",\n  \"password\": \"admin\"\n}", Protected: false},
 		{Method: "GET", Path: "/dashboard", Description: "Dashboard de monitoreo", ExampleBody: "", Protected: false, LocalhostOnly: true},
@@ -57,15 +100,15 @@ func GetRouteDefinitions() []RouteDefinition {
 		{Method: "POST", Path: "/api/refactor", Description: "Refactor de archivo", ExampleBody: "{\n  \"path\": \"api/internal/server/server.go\",\n  \"prompt\": \"extrae helper\"\n}", Protected: true},
 		{Method: "GET", Path: "/api/analyze-repo", Description: "Analisis de repositorio", ExampleBody: "", Protected: true},
 		{Method: "POST", Path: "/api/review/diff", Description: "Code review de diff", ExampleBody: "{\n  \"diff\": \"diff --git ...\"\n}", Protected: true},
-		{Method: "POST", Path: "/api/review/file", Description: "Code review de archivo", ExampleBody: "{\n  \"path\": \"api/internal/handlers/chat.go\"\n}", Protected: true},
-		{Method: "POST", Path: "/api/docs/file", Description: "Generar docs para archivo", ExampleBody: "{\n  \"path\": \"api/internal/services/repo.go\",\n  \"apply\": false\n}", Protected: true},
+		{Method: "POST", Path: "/api/review/file", Description: "Code review de archivo", ExampleBody: "{\n  \"path\": \"api/internal/chat/transport/chat.go\"\n}", Protected: true},
+		{Method: "POST", Path: "/api/docs/file", Description: "Generar docs para archivo", ExampleBody: "{\n  \"path\": \"api/internal/function/repo/repo.go\",\n  \"apply\": false\n}", Protected: true},
 		{Method: "POST", Path: "/api/docs/readme", Description: "Generar README", ExampleBody: "{\n  \"apply\": false\n}", Protected: true},
 		{Method: "POST", Path: "/api/debug/error", Description: "Analizar stack trace", ExampleBody: "{\n  \"stack_trace\": \"panic: ...\"\n}", Protected: true},
 		{Method: "POST", Path: "/api/debug/log", Description: "Analizar logs", ExampleBody: "{\n  \"log\": \"error line\",\n  \"lines\": 200\n}", Protected: true},
 		{Method: "POST", Path: "/api/translate", Description: "Traducir codigo", ExampleBody: "{\n  \"code\": \"print('hi')\",\n  \"from\": \"python\",\n  \"to\": \"go\"\n}", Protected: true},
 		{Method: "POST", Path: "/api/translate/file", Description: "Traducir archivo", ExampleBody: "{\n  \"path\": \"api/internal/domain/models.go\",\n  \"to\": \"typescript\"\n}", Protected: true},
 		{Method: "POST", Path: "/api/testgen", Description: "Generar tests desde codigo", ExampleBody: "{\n  \"lang\": \"go\",\n  \"code\": \"func Add(a,b int) int { return a+b }\"\n}", Protected: true},
-		{Method: "POST", Path: "/api/testgen/file", Description: "Generar tests para archivo", ExampleBody: "{\n  \"path\": \"api/internal/services/repo.go\",\n  \"apply\": false\n}", Protected: true},
+		{Method: "POST", Path: "/api/testgen/file", Description: "Generar tests para archivo", ExampleBody: "{\n  \"path\": \"api/internal/function/repo/repo.go\",\n  \"apply\": false\n}", Protected: true},
 		{Method: "POST", Path: "/api/sql/query", Description: "Generar query SQL", ExampleBody: "{\n  \"description\": \"listar usuarios activos\",\n  \"dialect\": \"postgres\"\n}", Protected: true},
 		{Method: "POST", Path: "/api/sql/migration", Description: "Generar migracion SQL", ExampleBody: "{\n  \"description\": \"crear tabla sessions\",\n  \"dialect\": \"postgres\"\n}", Protected: true},
 		{Method: "POST", Path: "/api/sql/explain", Description: "Explicar query SQL", ExampleBody: "{\n  \"sql\": \"SELECT * FROM users WHERE id = 1\"\n}", Protected: true},
@@ -74,7 +117,7 @@ func GetRouteDefinitions() []RouteDefinition {
 		{Method: "POST", Path: "/api/commit/message", Description: "Generar commit message desde diff", ExampleBody: "{\n  \"diff\": \"diff --git ...\"\n}", Protected: true},
 		{Method: "POST", Path: "/api/commit/staged", Description: "Generar commit message desde staged", ExampleBody: "{\n  \"repo_root\": \".\"\n}", Protected: true},
 		{Method: "GET", Path: "/api/architect/analyze", Description: "Analisis de arquitectura", ExampleBody: "", Protected: true},
-		{Method: "POST", Path: "/api/architect/refactor", Description: "Sugerencia de refactor", ExampleBody: "{\n  \"path\": \"api/internal/services/router.go\"\n}", Protected: true},
+		{Method: "POST", Path: "/api/architect/refactor", Description: "Sugerencia de refactor", ExampleBody: "{\n  \"path\": \"api/internal/function/core/router.go\"\n}", Protected: true},
 		{Method: "POST", Path: "/api/sessions", Description: "Crear sesion compartida", ExampleBody: "{}", Protected: true},
 		{Method: "POST", Path: "/api/sessions/{id}/join", Description: "Unirse a sesion", ExampleBody: "{}", Protected: true},
 		{Method: "GET", Path: "/api/sessions/{id}/messages", Description: "Obtener mensajes de sesion", ExampleBody: "", Protected: true},
@@ -109,25 +152,25 @@ func (s *Server) setupRoutes() {
 	}
 
 	// Inicializar servicios con inyección de dependencias
-	ollamaService := services.NewOllamaService(s.cfg, logger, s.cache)
-	routerService := services.NewRouterService(s.cfg, ollamaService, logger)
-	toolRegistry := services.NewToolRegistry(s.cfg.AgentToolsDir, s.cfg.RepoRoot, logger)
-	agentService := services.NewAgentService(ollamaService, logger, toolRegistry)
-	conversationService, err := services.NewConversationService(s.cfg.MongoURI, logger)
+	ollamaService := coreservice.NewOllamaService(s.cfg, logger, s.cache)
+	routerService := coreservice.NewRouterService(s.cfg, ollamaService, logger)
+	toolRegistry := coreservice.NewToolRegistry(s.cfg.AgentToolsDir, s.cfg.RepoRoot, logger)
+	agentService := agentservice.NewService(ollamaService, logger, toolRegistry)
+	conversationService, err := coreservice.NewConversationService(s.cfg.MongoURI, logger)
 	if err != nil {
 		logger.Warn("conversation service no disponible; se continuará sin persistencia", slog.String("error", err.Error()))
 	} else {
 		s.conversationService = conversationService
 	}
-	profileService, err := services.NewProfileService(s.cfg.MongoURI, logger)
+	profileService, err := profileservice.NewMongoService(s.cfg.MongoURI, logger)
 	if err != nil {
 		logger.Warn("profile service no disponible; se continuará sin perfiles", slog.String("error", err.Error()))
 	} else {
 		s.profileService = profileService
 	}
-	patchService := services.NewPatchService(logger)
-	repoService := services.NewRepoService(ollamaService, s.cfg.RepoRoot, logger)
-	qdrantService := services.NewQdrantService(
+	patchService := patchservice.NewService(logger)
+	repoService := reposervice.NewService(ollamaService, s.cfg.RepoRoot, logger)
+	qdrantService := coreservice.NewQdrantService(
 		s.cfg.QdrantURL,
 		s.cfg.RepoRoot,
 		s.cfg.VectorStorePath,
@@ -136,27 +179,28 @@ func (s *Server) setupRoutes() {
 		s.cfg.HTTPMaxRetries,
 		logger,
 	)
-	ragService := services.NewRAGService(
+	ragService := coreservice.NewRAGService(
 		ollamaService,
 		routerService,
 		qdrantService,
 		logger,
 		s.cache,
 		repoRoots,
+		s.cfg.PromptLang,
 		s.cfg.RAGCacheTTLSeconds,
 		s.cfg.RAGCacheMaxEntries,
 	)
-	reviewService := services.NewReviewService(ragService, s.cfg.RepoRoot, logger)
-	docGenService := services.NewDocGenService(ragService, s.cfg.RepoRoot, logger)
-	debugService := services.NewDebugService(ragService, s.cfg.RepoRoot, logger)
-	translatorService := services.NewTranslatorService(ragService, s.cfg.RepoRoot, logger)
-	testGenService := services.NewTestGenService(ragService, s.cfg.RepoRoot, logger)
-	sqlGenService := services.NewSQLGenService(ragService, s.cfg.RepoRoot, logger)
-	cicdService := services.NewCICDService(ragService, s.cfg.RepoRoot, logger)
-	commitGenService := services.NewCommitGenService(ragService, s.cfg.RepoRoot, logger)
-	sessionService := services.NewSessionService()
-	securityService := services.NewSecurityService(ragService, s.cfg.RepoRoot, logger)
-	indexerService, _ := services.NewIndexerService(repoRoots, s.cfg.IndexerStatePath, ollamaService, qdrantService, logger)
+	reviewService := reviewservice.NewService(ragService, s.cfg.RepoRoot, logger)
+	docGenService := docgenservice.NewService(ragService, s.cfg.RepoRoot, logger)
+	debugService := debugservice.NewService(ragService, s.cfg.RepoRoot, logger)
+	translatorService := translatorservice.NewService(ragService, s.cfg.RepoRoot, logger)
+	testGenService := testgenservice.NewService(ragService, s.cfg.RepoRoot, logger)
+	sqlGenService := sqlgenservice.NewService(ragService, s.cfg.RepoRoot, logger)
+	cicdService := cicdservice.NewService(ragService, s.cfg.RepoRoot, logger)
+	commitGenService := commitgenservice.NewService(ragService, s.cfg.RepoRoot, logger)
+	sessionService := sessionservice.NewService()
+	securityService := securityservice.NewService(ragService, s.cfg.RepoRoot, logger)
+	indexerService, _ := indexerservice.NewService(repoRoots, s.cfg.IndexerStatePath, ollamaService, qdrantService, logger)
 	indexerService.SetOnContentChange(ragService.InvalidateResponseCache)
 	indexerService.SetOnFileIndexed(func(path string) {
 		go func(filePath string) {
@@ -166,7 +210,7 @@ func (s *Server) setupRoutes() {
 				return
 			}
 			for _, finding := range findings {
-				if services.IsHighSeverity(finding.Severity) {
+				if securityservice.IsHighSeverity(finding.Severity) {
 					logger.Warn("security finding detectado",
 						slog.String("path", finding.Path),
 						slog.String("severity", finding.Severity),
@@ -178,7 +222,7 @@ func (s *Server) setupRoutes() {
 			}
 		}(path)
 	})
-	architectService := services.NewArchitectService(ragService, s.cfg.RepoRoot, indexerService, logger)
+	architectService := architectservice.NewService(ragService, s.cfg.RepoRoot, indexerService, logger)
 
 	var ollamaClient domain.OllamaClient = ollamaService
 	var vectorStore domain.VectorStore = qdrantService
@@ -188,32 +232,33 @@ func (s *Server) setupRoutes() {
 	s.indexer = indexer
 
 	// Inicializar handlers
-	authHandler := handlers.NewAuthHandler(s.cfg.JWTSecret)
-	generateHandler := handlers.NewGenerateHandler(ragEngine)
-	agentHandler := handlers.NewAgentHandler(agentRunner)
-	chatHandler := handlers.NewChatHandler(ragEngine)
-	repoHandler := handlers.NewRepoHandler(repoService)
-	reviewHandler := handlers.NewReviewHandler(reviewService)
-	docGenHandler := handlers.NewDocGenHandler(docGenService)
-	debugHandler := handlers.NewDebugHandler(debugService)
-	translatorHandler := handlers.NewTranslatorHandler(translatorService)
-	testGenHandler := handlers.NewTestGenHandler(testGenService)
-	sqlGenHandler := handlers.NewSQLGenHandler(sqlGenService)
-	cicdHandler := handlers.NewCICDHandler(cicdService)
-	commitGenHandler := handlers.NewCommitGenHandler(commitGenService)
-	sessionHandler := handlers.NewSessionHandler(sessionService, ragEngine)
-	securityHandler := handlers.NewSecurityHandler(securityService)
-	architectHandler := handlers.NewArchitectHandler(architectService)
-	profileHandler := handlers.NewProfileHandler(s.profileService)
-	patchHandler := handlers.NewPatchHandler(s.cfg.RepoRoot, patchService)
-	metricsHandler := handlers.NewMetricsHandler(metricsCollector)
-	indexerHandler := handlers.NewIndexerHandler(indexer)
-	dashboardHandler := handlers.NewDashboardHandler(s.cfg, metricsCollector, indexerService, logStream)
-	searchHandler := handlers.NewSearchHandler(ollamaClient, vectorStore, repoRoots)
-	openaiHandler := handlers.NewOpenAIHandler(ollamaClient, ragEngine, s.conversationService, s.profileService)
-	wsHandler := handlers.NewWSHandler(ragEngine, s.cfg.JWTSecret)
-	apiExplorerHandler := handlers.NewAPIExplorerHandler(GetRouteDefinitions())
-	healthHandler := handlers.NewHealthHandler(s.cfg)
+	authHandler := authtransport.NewHandler(s.cfg.JWTSecret)
+	generateHandler := generatetransport.NewHandler(ragEngine)
+	agentHandler := agenttransport.NewHandler(agentRunner)
+	chatHandler := chattransport.NewHandler(ragEngine)
+	repoHandler := repotransport.NewHandler(repoService)
+	reviewHandler := reviewtransport.NewHandler(reviewService)
+	docGenHandler := docgentransport.NewHandler(docGenService)
+	debugHandler := debugtransport.NewHandler(debugService)
+	translatorHandler := translatortransport.NewHandler(translatorService)
+	testGenHandler := testgentransport.NewHandler(testGenService)
+	sqlGenHandler := sqlgentransport.NewHandler(sqlGenService)
+	cicdHandler := cicdtransport.NewHandler(cicdService)
+	commitGenHandler := commitgentransport.NewHandler(commitGenService)
+	sessionHandler := sessiontransport.NewHandler(sessionService, ragEngine)
+	securityHandler := securitytransport.NewHandler(securityService)
+	architectHandler := architecttransport.NewHandler(architectService)
+	profileHandler := profiletransport.NewHandler(s.profileService)
+	patchHandler := patchtransport.NewHandler(s.cfg.RepoRoot, patchService)
+	metricsHandler := metricstransport.NewHandler(metricsCollector)
+	modelsHandler := modelstransport.NewHandler(ollamaService)
+	indexerHandler := indexertransport.NewHandler(indexer)
+	dashboardHandler := dashboardtransport.NewHandler(s.cfg, metricsCollector, indexerService, logStream)
+	searchHandler := searchtransport.NewHandler(ollamaClient, vectorStore, repoRoots)
+	openaiHandler := openaitransport.NewHandler(ollamaClient, ragEngine, s.conversationService, s.profileService)
+	wsHandler := wstransport.NewHandler(ragEngine, s.cfg.JWTSecret)
+	apiExplorerHandler := apiexplorertransport.NewHandler(GetRouteDefinitions())
+	healthHandler := healthtransport.NewHandler(s.cfg)
 	authMiddleware := middleware.NewAuthMiddleware(s.cfg.JWTSecret)
 	localhostOnly := middleware.LocalhostOnly
 
@@ -224,6 +269,7 @@ func (s *Server) setupRoutes() {
 	mux.HandleFunc("GET /health/liveness", healthHandler.Liveness)
 	mux.HandleFunc("GET /health/readiness", healthHandler.Readiness)
 	mux.HandleFunc("GET /metrics", metricsHandler.Handle)
+	mux.HandleFunc("GET /api/models", modelsHandler.List)
 	// Prometheus scrape endpoint
 	mux.Handle("GET /metrics/prometheus", promhttp.Handler())
 	mux.HandleFunc("POST /login", authHandler.Login)

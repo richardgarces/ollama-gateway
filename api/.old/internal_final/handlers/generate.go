@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"ollama-gateway/internal/domain"
+	"ollama-gateway/internal/core/domain"
 	"ollama-gateway/pkg/httputil"
 )
 
@@ -45,8 +45,8 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"ollama-gateway/internal/domain"
-	"ollama-gateway/internal/services"
+	"ollama-gateway/internal/core/domain"
+	"ollama-gateway/internal/usecase/services"
 	"ollama-gateway/pkg/httputil"
 )
 

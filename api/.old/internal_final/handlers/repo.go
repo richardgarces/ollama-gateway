@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"path/filepath"
 
-	"ollama-gateway/internal/domain"
+	"ollama-gateway/internal/core/domain"
 	"ollama-gateway/pkg/httputil"
 )
 
@@ -63,8 +63,8 @@ func (h *RepoHandler) Analyze(w http.ResponseWriter, r *http.Request) {
 	"net/http"
 	"path/filepath"
 
-	"ollama-gateway/internal/domain"
-	"ollama-gateway/internal/services"
+	"ollama-gateway/internal/core/domain"
+	"ollama-gateway/internal/usecase/services"
 	"ollama-gateway/pkg/httputil"
 )
 

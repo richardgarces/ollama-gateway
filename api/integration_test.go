@@ -18,8 +18,9 @@ import (
 	"time"
 
 	"ollama-gateway/internal/config"
+	coreservice "ollama-gateway/internal/function/core"
+	indexerservice "ollama-gateway/internal/function/indexer"
 	"ollama-gateway/internal/server"
-	"ollama-gateway/internal/services"
 	"ollama-gateway/pkg/cache"
 	"ollama-gateway/pkg/reposcope"
 
@@ -129,14 +130,14 @@ func TestFullRAGPipeline(t *testing.T) {
 
 	logger := slog.Default()
 	cacheBackend := cache.NewMemory()
-	ollama := services.NewOllamaService(cfg, logger, cacheBackend)
-	qdrant := services.NewQdrantService(qdrantURL, repoRoot, cfg.VectorStorePath, false, 5, 1, logger)
-	indexer, err := services.NewIndexerService([]string{repoRoot}, cfg.IndexerStatePath, ollama, qdrant, logger)
+	ollama := coreservice.NewOllamaService(cfg, logger, cacheBackend)
+	qdrant := coreservice.NewQdrantService(qdrantURL, repoRoot, cfg.VectorStorePath, false, 5, 1, logger)
+	indexer, err := indexerservice.NewIndexerService([]string{repoRoot}, cfg.IndexerStatePath, ollama, qdrant, logger)
 	if err != nil {
 		t.Fatalf("NewIndexerService() error = %v", err)
 	}
-	router := services.NewRouterService(cfg, ollama, logger)
-	rag := services.NewRAGService(ollama, router, qdrant, logger, cacheBackend, []string{repoRoot}, 1800, 500)
+	router := coreservice.NewRouterService(cfg, ollama, logger)
+	rag := coreservice.NewRAGService(ollama, router, qdrant, logger, cacheBackend, []string{repoRoot}, "en", 1800, 500)
 
 	if err := indexer.IndexRepo(); err != nil {
 		t.Fatalf("IndexRepo() error = %v", err)

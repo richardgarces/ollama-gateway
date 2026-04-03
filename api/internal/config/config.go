@@ -36,6 +36,7 @@ type Config struct {
 	MongoURI           string
 	RemoteAPIURL       string
 	RemoteAPIKey       string
+	PromptLang         string
 	CacheBackend       string
 	RedisURL           string
 	// Embedding cache settings
@@ -75,6 +76,7 @@ func Load() *Config {
 		MongoURI:                 getEnv("MONGO_URI", "mongodb://localhost:27017"),
 		RemoteAPIURL:             getEnv("REMOTE_API_URL", ""),
 		RemoteAPIKey:             getEnv("REMOTE_API_KEY", ""),
+		PromptLang:               getEnv("PROMPT_LANG", "en"),
 		CacheBackend:             getEnv("CACHE_BACKEND", "memory"),
 		RedisURL:                 getEnv("REDIS_URL", "redis://localhost:6379/0"),
 		EmbeddingCacheTTLSeconds: getEnvAsInt("EMBEDDING_CACHE_TTL_SECONDS", 3600),
