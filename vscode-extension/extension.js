@@ -5,16 +5,211 @@ const { spawn } = require('child_process');
 const path = require('path');
 const { LocalMetrics } = require('./metrics');
 
+const DEFAULT_WORKSPACE_PROFILES = {
+  fast: { model: 'local-rag', lang: 'es', temperature: 0.1 },
+  balanced: { model: 'local-rag', lang: 'es', temperature: 0.3 },
+  'deep-analysis': { model: 'local-rag', lang: 'es', temperature: 0.6 },
+};
+
+function normalizeTemperature(value, fallback) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(0, Math.min(1.5, n));
+}
+
+function normalizeProfile(profile, fallbackModel) {
+  const model = String(profile?.model || '').trim() || fallbackModel;
+  const lang = String(profile?.lang || '').trim() || 'es';
+  const temperature = normalizeTemperature(profile?.temperature, 0.3);
+  return { model, lang, temperature };
+}
+
+function buildWorkspaceProfiles(customProfiles, fallbackModel) {
+  const out = {};
+  for (const [id, profile] of Object.entries(DEFAULT_WORKSPACE_PROFILES)) {
+    out[id] = normalizeProfile(profile, fallbackModel);
+  }
+  if (!customProfiles || typeof customProfiles !== 'object' || Array.isArray(customProfiles)) {
+    return out;
+  }
+  for (const [id, profile] of Object.entries(customProfiles)) {
+    const key = String(id || '').trim();
+    if (!key || !profile || typeof profile !== 'object' || Array.isArray(profile)) continue;
+    out[key] = normalizeProfile(profile, fallbackModel);
+  }
+  return out;
+}
+
+function buildChatMessages(prompt, lang) {
+  const desiredLang = String(lang || '').trim();
+  const messages = [];
+  if (desiredLang) {
+    messages.push({ role: 'system', content: 'Respond in language: ' + desiredLang + '.' });
+  }
+  messages.push({ role: 'user', content: prompt });
+  return messages;
+}
+
 function getConfig() {
   const cfg = vscode.workspace.getConfiguration('copilotLocal');
+  const baseModel = String(cfg.get('model') || 'local-rag').trim() || 'local-rag';
+  const profiles = buildWorkspaceProfiles(cfg.get('workspaceProfiles', {}), baseModel);
+  const requestedProfileId = String(cfg.get('workspaceActiveProfile') || 'balanced').trim() || 'balanced';
+  const activeProfileId = profiles[requestedProfileId] ? requestedProfileId : 'balanced';
+  const activeProfile = profiles[activeProfileId] || normalizeProfile(DEFAULT_WORKSPACE_PROFILES.balanced, baseModel);
+
+  const workspaceModel = String(cfg.get('workspaceModel') || '').trim();
+  const workspaceLang = String(cfg.get('workspaceLang') || '').trim();
+  const workspaceTempRaw = cfg.get('workspaceTemperature');
+  const workspaceTemp = Number.isFinite(Number(workspaceTempRaw)) ? Number(workspaceTempRaw) : null;
+
+  const resolvedModel = workspaceModel || activeProfile.model || baseModel;
+  const resolvedLang = workspaceLang || activeProfile.lang || 'es';
+  const resolvedTemperature = workspaceTemp === null
+    ? activeProfile.temperature
+    : normalizeTemperature(workspaceTemp, activeProfile.temperature);
+
   return {
     apiUrl: (cfg.get('apiUrl') || 'http://localhost:8081').replace(/\/+$/, ''),
-    model: cfg.get('model') || 'local-rag',
+    model: resolvedModel,
     cliPath: cfg.get('cliPath') || '',
     jwtToken: cfg.get('jwtToken') || '',
     inlineCompletions: cfg.get('inlineCompletions', true),
     chatFontSize: cfg.get('chatFontSize', 13),
+    voiceInputEnabled: cfg.get('voiceInputEnabled', false),
+    quickPromptTemplates: cfg.get('quickPromptTemplates', {}),
+    qualityAlertsEnabled: cfg.get('qualityAlertsEnabled', true),
+    qualityLatencyThresholdMs: cfg.get('qualityLatencyThresholdMs', 8000),
+    qualityConsecutiveErrorsThreshold: cfg.get('qualityConsecutiveErrorsThreshold', 3),
+    workspaceModel,
+    workspaceLang,
+    workspaceTemperature: resolvedTemperature,
+    profiles,
+    activeProfileId,
+    activeProfile,
+    lang: resolvedLang,
+    temperature: resolvedTemperature,
   };
+}
+
+const QUICK_PROMPT_LAST_KEY = 'copilotLocal.lastQuickPromptTemplate';
+const CHAT_HISTORY_PREFIX = 'copilotLocal.chatHistory';
+const FAVORITES_PREFIX = 'copilotLocal.favorites';
+const CHAT_HISTORY_MAX = 500;
+const FAVORITES_MAX = 300;
+const CHAT_SESSION_STATE_KEY = 'copilotLocal.chatSessionState';
+const CHAT_SESSION_SCHEMA_VERSION = 1;
+
+function getQuickPromptTemplates() {
+  const defaults = [
+    { id: 'explain', label: 'explain', template: 'Explain this code:\n{{selection}}', source: 'built-in' },
+    { id: 'optimize', label: 'optimize', template: 'Optimize this code for performance and readability:\n{{selection}}', source: 'built-in' },
+    { id: 'secure', label: 'secure', template: 'Review this code for security issues and suggest fixes:\n{{selection}}', source: 'built-in' },
+    { id: 'test', label: 'test', template: 'Create robust tests for this code:\n{{selection}}', source: 'built-in' },
+  ];
+
+  const cfg = getConfig();
+  const custom = cfg.quickPromptTemplates;
+  if (!custom || typeof custom !== 'object' || Array.isArray(custom)) {
+    return defaults;
+  }
+
+  const customTemplates = [];
+  for (const [id, value] of Object.entries(custom)) {
+    const key = String(id || '').trim();
+    const template = String(value || '').trim();
+    if (!key || !template) continue;
+    customTemplates.push({ id: 'custom:' + key, label: key, template, source: 'custom' });
+  }
+  return [...defaults, ...customTemplates];
+}
+
+function applyTemplateToSelection(template, selectedText) {
+  const normalizedTemplate = String(template || '').trim();
+  const selected = String(selectedText || '').trim();
+  if (!normalizedTemplate) return selected;
+
+  if (normalizedTemplate.includes('{{selection}}')) {
+    return normalizedTemplate.replace(/\{\{selection\}\}/g, selected || '(sin selección activa)');
+  }
+  if (!selected) return normalizedTemplate;
+  return normalizedTemplate + '\n\n' + selected;
+}
+
+function getWorkspaceScopeKey() {
+  const folders = vscode.workspace.workspaceFolders || [];
+  if (folders.length === 0) return 'no-workspace';
+  return folders.map((f) => f.uri.toString()).sort().join('|');
+}
+
+function getChatHistoryStorageKey() {
+  return CHAT_HISTORY_PREFIX + ':' + getWorkspaceScopeKey();
+}
+
+function normalizeHistoryMessages(messages) {
+  if (!Array.isArray(messages)) return [];
+  return messages
+    .map((m) => ({
+      id: String(m?.id || '').trim(),
+      role: m?.role === 'assistant' ? 'assistant' : 'user',
+      content: String(m?.content || ''),
+      timestamp: Number(m?.timestamp || Date.now()),
+    }))
+    .filter((m) => m.id && m.content.trim())
+    .slice(-CHAT_HISTORY_MAX);
+}
+
+function getFavoritesStorageKey() {
+  return FAVORITES_PREFIX + ':' + getWorkspaceScopeKey();
+}
+
+function normalizeFavorites(items) {
+  if (!Array.isArray(items)) return [];
+  return items
+    .map((f) => ({
+      id: String(f?.id || '').trim(),
+      title: String(f?.title || '').trim(),
+      content: String(f?.content || ''),
+      timestamp: Number(f?.timestamp || Date.now()),
+    }))
+    .filter((f) => f.id && f.title && f.content.trim())
+    .slice(-FAVORITES_MAX);
+}
+
+function normalizeSessionState(raw) {
+  const empty = {
+    schemaVersion: CHAT_SESSION_SCHEMA_VERSION,
+    messages: [],
+    selectedModel: '',
+    activeSessionId: '',
+  };
+
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return empty;
+  const version = Number(raw.schemaVersion || raw.version || 0);
+  if (version !== CHAT_SESSION_SCHEMA_VERSION) return empty;
+
+  return {
+    schemaVersion: CHAT_SESSION_SCHEMA_VERSION,
+    messages: normalizeHistoryMessages(raw.messages),
+    selectedModel: String(raw.selectedModel || '').trim(),
+    activeSessionId: String(raw.activeSessionId || '').trim(),
+  };
+}
+
+function buildSessionState(messages, selectedModel, activeSessionId) {
+  return {
+    schemaVersion: CHAT_SESSION_SCHEMA_VERSION,
+    messages: normalizeHistoryMessages(messages),
+    selectedModel: String(selectedModel || '').trim(),
+    activeSessionId: String(activeSessionId || '').trim(),
+  };
+}
+
+function buildFavoriteTitle(content) {
+  const firstLine = String(content || '').split('\n')[0] || '';
+  const clean = firstLine.replace(/\s+/g, ' ').trim();
+  if (!clean) return 'Untitled favorite';
+  return clean.length > 72 ? clean.slice(0, 72) + '…' : clean;
 }
 
 function normalizeLanguageId(id) {
@@ -87,8 +282,38 @@ function getJSON(endpoint) {
   return requestJSON('GET', endpoint);
 }
 
+async function requestChatCompletion(prompt, model, metrics) {
+  const startedAt = Date.now();
+  const cfg = getConfig();
+  let content = '';
+  let hadError = false;
+  try {
+    const res = await postJSON('/openai/v1/chat/completions', {
+      model,
+      messages: buildChatMessages(prompt, cfg.lang),
+      temperature: cfg.temperature,
+      stream: false,
+    });
+    const elapsedMs = Date.now() - startedAt;
+    content = String(res?.choices?.[0]?.message?.content || res?.choices?.[0]?.text || '').trim();
+    return {
+      model,
+      content,
+      elapsedMs,
+      length: content.length,
+    };
+  } catch (err) {
+    hadError = true;
+    throw err;
+  } finally {
+    if (metrics) {
+      await metrics.trackRequest(Date.now() - startedAt, content.length, 0, hadError);
+    }
+  }
+}
+
 function streamHTTP(prompt, model, onChunk, onDone, abortCtl, metrics) {
-  const { apiUrl, jwtToken } = getConfig();
+  const { apiUrl, jwtToken, lang, temperature } = getConfig();
   const url = new URL(apiUrl + '/openai/v1/chat/completions');
   const lib = url.protocol === 'https:' ? https : http;
   const startedAt = Date.now();
@@ -107,7 +332,8 @@ function streamHTTP(prompt, model, onChunk, onDone, abortCtl, metrics) {
 
   const body = JSON.stringify({
     model,
-    messages: [{ role: 'user', content: prompt }],
+    messages: buildChatMessages(prompt, lang),
+    temperature,
     stream: true,
   });
 
@@ -155,7 +381,7 @@ function streamWS(prompt, model, onChunk, onDone, abortCtl, metrics) {
     return;
   }
 
-  const { apiUrl, jwtToken } = getConfig();
+  const { apiUrl, jwtToken, lang, temperature } = getConfig();
   if (!jwtToken) {
     onDone(new Error('JWT token requerido para WebSocket'));
     return;
@@ -188,7 +414,7 @@ function streamWS(prompt, model, onChunk, onDone, abortCtl, metrics) {
   }
 
   ws.onopen = () => {
-    ws.send(JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], stream: true }));
+    ws.send(JSON.stringify({ model, messages: buildChatMessages(prompt, lang), temperature, stream: true }));
   };
 
   ws.onmessage = (event) => {
@@ -277,7 +503,104 @@ async function trySetSCMInput(message) {
   return false;
 }
 
-function getChatPanelHTML(fontSize) {
+function clipText(text, maxLen) {
+  const src = String(text || '').trim();
+  if (src.length <= maxLen) return src;
+  return src.slice(0, maxLen) + '\n...[truncated]...';
+}
+
+async function tryReadTerminalSelection() {
+  const before = await vscode.env.clipboard.readText();
+  try {
+    await vscode.commands.executeCommand('workbench.action.terminal.copySelection');
+  } catch {
+    return '';
+  }
+  const after = await vscode.env.clipboard.readText();
+  if (!after || after === before) return '';
+  return after;
+}
+
+async function collectExplainTestFailureContext() {
+  const editor = vscode.window.activeTextEditor;
+  const filePath = editor?.document?.uri?.fsPath || '';
+  const languageId = editor?.document?.languageId || 'plaintext';
+  const selected = editor?.document?.getText(editor.selection.isEmpty ? undefined : editor.selection) || '';
+
+  let raw = selected.trim();
+  let source = raw ? 'editor-selection' : '';
+  if (!raw) {
+    const termSelection = (await tryReadTerminalSelection()).trim();
+    if (termSelection) {
+      raw = termSelection;
+      source = 'terminal-selection';
+    }
+  }
+  if (!raw) {
+    const clipboard = (await vscode.env.clipboard.readText()).trim();
+    if (clipboard) {
+      raw = clipboard;
+      source = 'clipboard';
+    }
+  }
+
+  const input = await vscode.window.showInputBox({
+    title: 'Explain Test Failure',
+    prompt: 'Pega o edita la salida del test fallido',
+    value: raw,
+    ignoreFocusOut: true,
+  });
+
+  if (!input || !input.trim()) return null;
+
+  const codeContext = selected.trim() ? clipText(selected, 2400) : '';
+  const errorOutput = clipText(input, 6000);
+
+  const analysisPrompt = [
+    'Analyze this failed test output and return a concise debugging report.',
+    'Answer in Spanish.',
+    '',
+    'Required sections:',
+    '1) Hypotheses (top causes ranked)',
+    '2) Fix Plan (ordered actionable steps)',
+    '3) Suggested Regression Test (include code block)',
+    '',
+    'Project context:',
+    '- File: ' + (filePath || '(unknown)'),
+    '- Language: ' + languageId,
+    '- Failure source: ' + (source || 'manual-input'),
+    '',
+    'Selected code context:',
+    codeContext || '(none)',
+    '',
+    'Test failure output:',
+    errorOutput,
+  ].join('\n');
+
+  const regressionPrompt = [
+    'Generate a regression test from this failure context.',
+    'Answer in Spanish and include only:',
+    '1) Short rationale (max 4 lines)',
+    '2) Final test code in one fenced code block',
+    '',
+    'File: ' + (filePath || '(unknown)'),
+    'Language: ' + languageId,
+    '',
+    'Code context:',
+    codeContext || '(none)',
+    '',
+    'Failure output:',
+    errorOutput,
+  ].join('\n');
+
+  return {
+    prompt: analysisPrompt,
+    regressionPrompt,
+    source: source || 'manual-input',
+  };
+}
+
+function getChatPanelHTML(fontSize, voiceInputEnabled) {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -288,12 +611,34 @@ function getChatPanelHTML(fontSize) {
 body { font-family: var(--vscode-font-family); font-size: ${fontSize}px; background: var(--vscode-editor-background); color: var(--vscode-editor-foreground); height: 100vh; display: flex; flex-direction: column; }
 #header { display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; border-bottom: 1px solid var(--vscode-panel-border); background: linear-gradient(90deg, var(--vscode-editor-background), var(--vscode-sideBar-background)); gap: 8px; }
 #leftTools { display: flex; align-items: center; gap: 8px; }
+#rightTools { display: flex; align-items: center; gap: 8px; }
+#profileBadge { font-size: 11px; color: var(--vscode-descriptionForeground); border: 1px solid var(--vscode-panel-border); border-radius: 999px; padding: 2px 8px; }
 #models { background: var(--vscode-dropdown-background); color: var(--vscode-dropdown-foreground); border: 1px solid var(--vscode-dropdown-border); padding: 4px; }
+#codeOnlyWrap { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+#focusStats { font-size: 11px; color: var(--vscode-descriptionForeground); min-width: 70px; }
+#voiceControls { display: flex; align-items: center; gap: 6px; }
+#voiceStatus { font-size: 11px; padding: 2px 8px; border: 1px solid var(--vscode-panel-border); border-radius: 999px; }
+#voiceStatus[data-state="listening"] { color: var(--vscode-testing-iconPassed); border-color: var(--vscode-testing-iconPassed); }
+#voiceStatus[data-state="stopped"] { color: var(--vscode-descriptionForeground); }
+#voiceStatus[data-state="unavailable"] { color: var(--vscode-testing-iconFailed); border-color: var(--vscode-testing-iconFailed); }
+#compareView { display: none; border-bottom: 1px solid var(--vscode-panel-border); padding: 10px; gap: 10px; }
+#sessionBanner { display: none; margin: 8px 12px 0; padding: 8px 10px; border: 1px solid var(--vscode-textLink-foreground); border-radius: 6px; color: var(--vscode-textLink-foreground); background: color-mix(in srgb, var(--vscode-textLink-foreground) 10%, transparent); font-size: 12px; }
+#compareHeader { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+#compareMeta { font-size: 12px; color: var(--vscode-descriptionForeground); }
+#compareGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.compareCol { border: 1px solid var(--vscode-panel-border); border-radius: 6px; padding: 8px; min-height: 120px; background: color-mix(in srgb, var(--vscode-editor-background) 92%, #000 8%); }
+.compareTitle { font-weight: 700; margin-bottom: 4px; }
+.compareStats { font-size: 11px; color: var(--vscode-descriptionForeground); margin-bottom: 6px; }
+.compareContent { white-space: pre-wrap; line-height: 1.4; }
 #messages { flex: 1; overflow-y: auto; padding: 12px; }
 .msg { margin-bottom: 12px; line-height: 1.5; word-wrap: break-word; }
+.msg.highlighted { outline: 2px solid var(--vscode-textLink-foreground); border-radius: 6px; animation: historyPulse 1.5s ease-in-out 1; }
 .msg .role { font-weight: 700; margin-right: 6px; }
+.msg .starBtn { padding: 2px 8px; font-size: 11px; margin-left: 6px; }
 .msg.user .role { color: var(--vscode-textLink-foreground); }
 .msg-content { white-space: pre-wrap; }
+.focus-meta { font-size: 11px; color: var(--vscode-descriptionForeground); margin-bottom: 6px; }
+.focus-empty { color: var(--vscode-descriptionForeground); font-style: italic; }
 pre { background: color-mix(in srgb, var(--vscode-editor-background) 85%, #000 15%); border: 1px solid var(--vscode-panel-border); border-radius: 8px; padding: 10px; overflow-x: auto; margin-top: 6px; position: relative; }
 pre code { font-family: var(--vscode-editor-font-family); font-size: 0.95em; }
 .code-actions { position: absolute; top: 6px; right: 6px; display: flex; gap: 4px; }
@@ -303,10 +648,16 @@ pre code { font-family: var(--vscode-editor-font-family); font-size: 0.95em; }
 button { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border: 1px solid var(--vscode-button-border); border-radius: 4px; padding: 6px 12px; cursor: pointer; }
 button:hover { filter: brightness(1.06); }
 button:disabled { opacity: 0.5; cursor: default; }
+@keyframes historyPulse {
+  0% { background: color-mix(in srgb, var(--vscode-textLink-foreground) 24%, transparent); }
+  100% { background: transparent; }
+}
 </style>
 </head>
 <body>
-<div id="header"><div id="leftTools"><strong>Copilot Local Chat</strong><select id="models"></select></div><button id="exportBtn">Export</button></div>
+<div id="header"><div id="leftTools"><strong>Copilot Local Chat</strong><span id="profileBadge">profile: -</span><select id="models"></select></div><div id="rightTools"><label id="codeOnlyWrap"><input id="codeOnlyToggle" type="checkbox"/> Code only</label><span id="focusStats">0 blocks</span><div id="voiceControls"><button id="micBtn" title="Dictado por voz">Mic</button><span id="voiceStatus" data-state="stopped">detenido</span></div><button id="compareBtn">Compare</button><button id="regressionBtn" disabled>Regression Test</button><button id="clearHistoryBtn">Clear History</button><button id="exportBtn">Export</button></div></div>
+<div id="sessionBanner"></div>
+<div id="compareView"><div id="compareHeader"><strong>Compare Models</strong><div><span id="compareMeta"></span> <button id="closeCompareBtn">Close</button></div></div><div id="compareGrid"><div class="compareCol"><div class="compareTitle" id="compareLeftTitle">-</div><div class="compareStats" id="compareLeftStats"></div><div class="compareContent" id="compareLeftContent"></div></div><div class="compareCol"><div class="compareTitle" id="compareRightTitle">-</div><div class="compareStats" id="compareRightStats"></div><div class="compareContent" id="compareRightContent"></div></div></div></div>
 <div id="messages"></div>
 <div id="inputRow"><textarea id="prompt" rows="1" placeholder="Ask something..."></textarea><button id="send">Send</button></div>
 <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.10.0/lib/core.min.js"></script>
@@ -324,9 +675,34 @@ const messagesEl = document.getElementById('messages');
 const promptEl = document.getElementById('prompt');
 const sendBtn = document.getElementById('send');
 const exportBtn = document.getElementById('exportBtn');
+const compareBtn = document.getElementById('compareBtn');
+const regressionBtn = document.getElementById('regressionBtn');
+const closeCompareBtn = document.getElementById('closeCompareBtn');
+const clearHistoryBtn = document.getElementById('clearHistoryBtn');
+const codeOnlyToggleEl = document.getElementById('codeOnlyToggle');
+const focusStatsEl = document.getElementById('focusStats');
 const modelsEl = document.getElementById('models');
+const micBtn = document.getElementById('micBtn');
+const voiceStatusEl = document.getElementById('voiceStatus');
+const compareViewEl = document.getElementById('compareView');
+const compareMetaEl = document.getElementById('compareMeta');
+const compareLeftTitleEl = document.getElementById('compareLeftTitle');
+const compareLeftStatsEl = document.getElementById('compareLeftStats');
+const compareLeftContentEl = document.getElementById('compareLeftContent');
+const compareRightTitleEl = document.getElementById('compareRightTitle');
+const compareRightStatsEl = document.getElementById('compareRightStats');
+const compareRightContentEl = document.getElementById('compareRightContent');
+const profileBadgeEl = document.getElementById('profileBadge');
+const sessionBannerEl = document.getElementById('sessionBanner');
+const voiceEnabled = ${voiceInputEnabled ? 'true' : 'false'};
 let pending = null;
 const chatHistory = [];
+let recognition = null;
+let listening = false;
+let historySyncTimer = null;
+let codeOnlyMode = false;
+let sessionBannerTimer = null;
+let regressionPromptDraft = '';
 
 function sanitizeHTML(text) {
   return String(text || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\"/g, '&quot;').replace(/'/g, '&#39;');
@@ -350,6 +726,41 @@ function renderMarkdownWithCode(text) {
   return out;
 }
 
+function extractCodeBlocks(text) {
+  const src = String(text || '');
+  const fence = String.fromCharCode(96) + String.fromCharCode(96) + String.fromCharCode(96);
+  const re = new RegExp(fence + '([a-zA-Z0-9_-]*)\\\\n([\\\\s\\\\S]*?)' + fence, 'g');
+  const blocks = [];
+  let m;
+  while ((m = re.exec(src)) !== null) {
+    blocks.push({
+      lang: String(m[1] || 'plaintext').trim() || 'plaintext',
+      code: String(m[2] || ''),
+    });
+  }
+  return blocks;
+}
+
+function renderCodeOnly(text) {
+  const blocks = extractCodeBlocks(text);
+  if (blocks.length === 0) {
+    return '<span class="focus-empty">No fenced code blocks</span>';
+  }
+
+  const langs = [...new Set(blocks.map((b) => b.lang.toLowerCase()))];
+  let out = '<div class="focus-meta">' + String(blocks.length) + ' block(s) | ' + sanitizeHTML(langs.join(', ')) + '</div>';
+  blocks.forEach((b) => {
+    const lang = sanitizeHTML(b.lang || 'plaintext');
+    const code = sanitizeHTML(b.code || '');
+    out += '<pre><div class="code-actions"><button data-copy="1">Copy</button><button data-apply="1" data-lang="' + lang + '">Apply</button></div><code class="language-' + lang + '">' + code + '</code></pre>';
+  });
+  return out;
+}
+
+function renderMessageContent(text) {
+  return codeOnlyMode ? renderCodeOnly(text) : renderMarkdownWithCode(text);
+}
+
 function attachCodeActions(root) {
   root.querySelectorAll('button[data-copy]').forEach((btn) => {
     btn.addEventListener('click', async () => {
@@ -366,21 +777,128 @@ function attachCodeActions(root) {
   });
 }
 
-function addMessage(role, text) {
+function generateMessageId() {
+  return Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+}
+
+function scheduleHistorySync() {
+  if (historySyncTimer) clearTimeout(historySyncTimer);
+  historySyncTimer = setTimeout(() => {
+    vscode.postMessage({ type: 'historyUpdate', messages: chatHistory });
+  }, 80);
+}
+
+function updateFocusStats() {
+  let blocks = 0;
+  const langs = new Set();
+  chatHistory.forEach((m) => {
+    const found = extractCodeBlocks(m.content || '');
+    blocks += found.length;
+    found.forEach((b) => langs.add(String(b.lang || 'plaintext').toLowerCase()));
+  });
+  const langText = langs.size > 0 ? Array.from(langs).join(', ') : '-';
+  focusStatsEl.textContent = String(blocks) + ' blocks | ' + langText;
+}
+
+function updateProfileBadge(profile) {
+  if (!profileBadgeEl) return;
+  const id = String(profile?.id || '-');
+  const model = String(profile?.model || '-');
+  const lang = String(profile?.lang || '-');
+  const temperature = Number(profile?.temperature || 0).toFixed(2);
+  profileBadgeEl.textContent = 'profile: ' + id;
+  profileBadgeEl.title = 'model=' + model + ' | lang=' + lang + ' | temperature=' + temperature;
+}
+
+function showSessionBanner(text) {
+  if (!sessionBannerEl) return;
+  if (sessionBannerTimer) clearTimeout(sessionBannerTimer);
+  sessionBannerEl.textContent = String(text || 'session restored');
+  sessionBannerEl.style.display = 'block';
+  sessionBannerTimer = setTimeout(() => {
+    sessionBannerEl.style.display = 'none';
+  }, 3200);
+}
+
+function rerenderChatKeepingScroll() {
+  const prevScrollHeight = messagesEl.scrollHeight;
+  const ratio = prevScrollHeight > 0 ? (messagesEl.scrollTop / prevScrollHeight) : 0;
+  const pendingId = pending?.dataset.msgId || '';
+
+  messagesEl.innerHTML = '';
+  for (const item of chatHistory) {
+    const d = document.createElement('div');
+    d.className = 'msg ' + item.role;
+    d.dataset.msgId = item.id;
+
+    const roleEl = document.createElement('span');
+    roleEl.className = 'role';
+    roleEl.textContent = item.role === 'user' ? 'You:' : 'AI:';
+    if (item.role === 'assistant') {
+      const starBtn = document.createElement('button');
+      starBtn.className = 'starBtn';
+      starBtn.textContent = 'Star';
+      starBtn.title = 'Guardar en favoritos';
+      starBtn.addEventListener('click', () => {
+        const current = chatHistory.find((h) => h.id === item.id);
+        const content = current?.content || d.querySelector('.msg-content')?.innerText || '';
+        if (!content.trim()) return;
+        vscode.postMessage({ type: 'favoriteAdd', content });
+        starBtn.textContent = 'Starred';
+        starBtn.disabled = true;
+      });
+      d.appendChild(starBtn);
+    }
+
+    const contentEl = document.createElement('div');
+    contentEl.className = 'msg-content';
+    contentEl.innerHTML = renderMessageContent(item.content || '');
+
+    d.appendChild(roleEl);
+    d.appendChild(contentEl);
+    messagesEl.appendChild(d);
+    d.querySelectorAll('pre code').forEach((el) => { try { hljs.highlightElement(el); } catch {} });
+    attachCodeActions(d);
+  }
+
+  pending = pendingId ? Array.from(messagesEl.querySelectorAll('.msg')).find((n) => n.dataset.msgId === pendingId) || null : null;
+  messagesEl.scrollTop = Math.max(0, Math.round(messagesEl.scrollHeight * ratio));
+}
+
+function addMessage(role, text, options = {}) {
   const d = document.createElement('div');
   d.className = 'msg ' + role;
+  const msgId = options.id || generateMessageId();
+  d.dataset.msgId = msgId;
   const roleEl = document.createElement('span');
   roleEl.className = 'role';
   roleEl.textContent = role === 'user' ? 'You:' : 'AI:';
+  if (role === 'assistant') {
+    const starBtn = document.createElement('button');
+    starBtn.className = 'starBtn';
+    starBtn.textContent = 'Star';
+    starBtn.title = 'Guardar en favoritos';
+    starBtn.addEventListener('click', () => {
+      const item = chatHistory.find((h) => h.id === msgId);
+      const content = item?.content || d.querySelector('.msg-content')?.innerText || '';
+      if (!content.trim()) return;
+      vscode.postMessage({ type: 'favoriteAdd', content });
+      starBtn.textContent = 'Starred';
+      starBtn.disabled = true;
+    });
+    d.appendChild(starBtn);
+  }
   const contentEl = document.createElement('div');
   contentEl.className = 'msg-content';
-  contentEl.innerHTML = renderMarkdownWithCode(text);
+  contentEl.innerHTML = renderMessageContent(text);
   d.appendChild(roleEl);
   d.appendChild(contentEl);
   messagesEl.appendChild(d);
   d.querySelectorAll('pre code').forEach((el) => { try { hljs.highlightElement(el); } catch {} });
   attachCodeActions(d);
-  chatHistory.push({ role, content: text, timestamp: Date.now() });
+  chatHistory.push({ id: msgId, role, content: text, timestamp: options.timestamp || Date.now() });
+  if (!options.skipSync) scheduleHistorySync();
+  updateFocusStats();
   messagesEl.scrollTop = messagesEl.scrollHeight;
   return d;
 }
@@ -389,12 +907,52 @@ function startAssistant() { pending = addMessage('assistant', ''); return pendin
 
 function updatePending(text) {
   if (!pending) return;
-  const prev = pending.querySelector('.msg-content')?.innerText || '';
+  const pendingId = pending.dataset.msgId || '';
+  const pendingItem = pendingId ? chatHistory.find((h) => h.id === pendingId) : null;
+  const prev = pendingItem?.content || pending.querySelector('.msg-content')?.innerText || '';
   const next = prev + text;
-  pending.querySelector('.msg-content').innerHTML = renderMarkdownWithCode(next);
+  pending.querySelector('.msg-content').innerHTML = renderMessageContent(next);
+  if (pendingId) {
+    const item = chatHistory.find((h) => h.id === pendingId);
+    if (item) {
+      item.content = next;
+      scheduleHistorySync();
+    }
+  }
   pending.querySelectorAll('pre code').forEach((el) => { try { hljs.highlightElement(el); } catch {} });
   attachCodeActions(pending);
+  updateFocusStats();
   messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+function resetHistoryUI() {
+  messagesEl.innerHTML = '';
+  chatHistory.length = 0;
+  pending = null;
+  updateFocusStats();
+}
+
+function hydrateHistory(messages) {
+  resetHistoryUI();
+  const list = Array.isArray(messages) ? messages : [];
+  list.forEach((m) => {
+    addMessage(m.role === 'assistant' ? 'assistant' : 'user', String(m.content || ''), {
+      id: String(m.id || ''),
+      timestamp: Number(m.timestamp || Date.now()),
+      skipSync: true,
+    });
+  });
+}
+
+function highlightMessageById(messageId) {
+  const id = String(messageId || '').trim();
+  if (!id) return;
+  const el = Array.from(messagesEl.querySelectorAll('.msg')).find((n) => n.dataset.msgId === id);
+  if (!el) return;
+  messagesEl.querySelectorAll('.msg.highlighted').forEach((n) => n.classList.remove('highlighted'));
+  el.classList.add('highlighted');
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  setTimeout(() => el.classList.remove('highlighted'), 1800);
 }
 
 function sendNow(text) {
@@ -403,6 +961,123 @@ function sendNow(text) {
   sendBtn.disabled = true;
   startAssistant();
   vscode.postMessage({ type: 'chat', text, model: modelsEl.value || '' });
+}
+
+function setRegressionDraft(text) {
+  regressionPromptDraft = String(text || '').trim();
+  if (!regressionBtn) return;
+  regressionBtn.disabled = !regressionPromptDraft;
+  regressionBtn.title = regressionPromptDraft ? 'Generar test de regresion sugerido' : 'Disponible tras Explain Test Failure';
+}
+
+function openCompareView() {
+  compareViewEl.style.display = 'block';
+}
+
+function closeCompareView() {
+  compareViewEl.style.display = 'none';
+}
+
+function setComparePending() {
+  openCompareView();
+  compareMetaEl.textContent = 'comparando...';
+  compareLeftTitleEl.textContent = '-';
+  compareRightTitleEl.textContent = '-';
+  compareLeftStatsEl.textContent = '';
+  compareRightStatsEl.textContent = '';
+  compareLeftContentEl.textContent = '';
+  compareRightContentEl.textContent = '';
+}
+
+function renderCompareResult(payload) {
+  if (!payload) return;
+  openCompareView();
+  compareMetaEl.textContent = payload.prompt ? ('Prompt length: ' + String(payload.prompt.length)) : '';
+
+  const left = payload.left || {};
+  const right = payload.right || {};
+  compareLeftTitleEl.textContent = left.model || '-';
+  compareLeftStatsEl.textContent = 'time: ' + String(left.elapsedMs || 0) + ' ms | chars: ' + String(left.length || 0);
+  compareLeftContentEl.textContent = left.content || '';
+
+  compareRightTitleEl.textContent = right.model || '-';
+  compareRightStatsEl.textContent = 'time: ' + String(right.elapsedMs || 0) + ' ms | chars: ' + String(right.length || 0);
+  compareRightContentEl.textContent = right.content || '';
+}
+
+function setVoiceStatus(state, label) {
+  if (!voiceStatusEl) return;
+  voiceStatusEl.dataset.state = state;
+  voiceStatusEl.textContent = label;
+}
+
+function appendTranscript(text) {
+  const t = String(text || '').trim();
+  if (!t) return;
+  const sep = promptEl.value && !/\s$/.test(promptEl.value) ? ' ' : '';
+  promptEl.value += sep + t;
+  promptEl.focus();
+}
+
+function speechCtor() {
+  return window.SpeechRecognition || window.webkitSpeechRecognition;
+}
+
+function initVoiceInput() {
+  if (!voiceEnabled) {
+    if (micBtn) micBtn.style.display = 'none';
+    if (voiceStatusEl) voiceStatusEl.style.display = 'none';
+    return;
+  }
+
+  const Ctor = speechCtor();
+  if (typeof Ctor !== 'function') {
+    if (micBtn) micBtn.disabled = true;
+    setVoiceStatus('unavailable', 'no disponible');
+    return;
+  }
+
+  recognition = new Ctor();
+  recognition.continuous = true;
+  recognition.interimResults = true;
+  recognition.lang = navigator.language || 'es-ES';
+
+  recognition.onstart = () => {
+    listening = true;
+    setVoiceStatus('listening', 'escuchando');
+  };
+
+  recognition.onend = () => {
+    listening = false;
+    setVoiceStatus('stopped', 'detenido');
+  };
+
+  recognition.onerror = () => {
+    listening = false;
+    setVoiceStatus('unavailable', 'error');
+  };
+
+  recognition.onresult = (event) => {
+    let finalText = '';
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      const result = event.results[i];
+      if (result.isFinal && result[0] && result[0].transcript) {
+        finalText += result[0].transcript + ' ';
+      }
+    }
+    appendTranscript(finalText);
+  };
+
+  if (micBtn) {
+    micBtn.addEventListener('click', () => {
+      try {
+        if (!listening) recognition.start();
+        else recognition.stop();
+      } catch {
+        setVoiceStatus('unavailable', 'error');
+      }
+    });
+  }
 }
 
 function send() {
@@ -424,6 +1099,38 @@ exportBtn.addEventListener('click', () => {
   vscode.postMessage({ type: 'export', messages: chatHistory });
 });
 
+compareBtn.addEventListener('click', () => {
+  const prompt = promptEl.value.trim();
+  if (!prompt) return;
+  setComparePending();
+  vscode.postMessage({ type: 'compare', text: prompt });
+});
+
+regressionBtn.addEventListener('click', () => {
+  if (!regressionPromptDraft) return;
+  sendNow(regressionPromptDraft);
+});
+
+modelsEl.addEventListener('change', () => {
+  vscode.postMessage({ type: 'modelSelected', model: modelsEl.value || '' });
+});
+
+closeCompareBtn.addEventListener('click', () => {
+  closeCompareView();
+});
+
+clearHistoryBtn.addEventListener('click', () => {
+  vscode.postMessage({ type: 'clearHistoryRequest' });
+});
+
+codeOnlyToggleEl.addEventListener('change', () => {
+  codeOnlyMode = !!codeOnlyToggleEl.checked;
+  rerenderChatKeepingScroll();
+});
+
+initVoiceInput();
+updateFocusStats();
+
 window.addEventListener('message', (e) => {
   const msg = e.data;
   if (msg.type === 'chunk') { updatePending(msg.text || ''); return; }
@@ -432,6 +1139,12 @@ window.addEventListener('message', (e) => {
   if (msg.type === 'prefill') { promptEl.value = msg.text || ''; promptEl.focus(); return; }
   if (msg.type === 'runPrompt') { sendNow(msg.text || ''); return; }
   if (msg.type === 'externalResult') { addMessage('assistant', msg.text || ''); return; }
+  if (msg.type === 'hydrateHistory') { hydrateHistory(msg.messages || []); return; }
+  if (msg.type === 'highlightHistory') { highlightMessageById(msg.id || ''); return; }
+  if (msg.type === 'historyCleared') { resetHistoryUI(); return; }
+  if (msg.type === 'compareStart') { setComparePending(); return; }
+  if (msg.type === 'compareResult') { renderCompareResult(msg); return; }
+  if (msg.type === 'openCompareMode') { openCompareView(); return; }
   if (msg.type === 'models') {
     const models = Array.isArray(msg.models) ? msg.models : [];
     const current = msg.current || '';
@@ -439,6 +1152,18 @@ window.addEventListener('message', (e) => {
     const arr = models.length > 0 ? models : [current || 'local-rag'];
     arr.forEach((m) => { const opt = document.createElement('option'); opt.value = m; opt.textContent = m; modelsEl.appendChild(opt); });
     modelsEl.value = arr.includes(current) ? current : arr[0];
+    return;
+  }
+  if (msg.type === 'profileUpdate') {
+    updateProfileBadge(msg.profile || {});
+    return;
+  }
+  if (msg.type === 'sessionRestored') {
+    showSessionBanner(msg.text || 'session restored');
+    return;
+  }
+  if (msg.type === 'regressionDraft') {
+    setRegressionDraft(msg.text || '');
   }
 });
 </script>
@@ -451,12 +1176,121 @@ function activate(context) {
   const metrics = new LocalMetrics(context);
   let chatPanel = null;
   let activeSessionId = '';
+  let selectedModel = getConfig().model;
+  let consecutiveErrors = 0;
+  const activeQualityAlerts = new Set();
+  let shouldShowRestoredBanner = false;
+
+  const profileStatus = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 88);
+  profileStatus.command = 'copilot-local.switchProfile';
+  context.subscriptions.push(profileStatus);
+
+  const refreshProfileStatus = () => {
+    const cfg = getConfig();
+    profileStatus.text = 'Profile: ' + cfg.activeProfileId;
+    profileStatus.tooltip = [
+      'Active profile: ' + cfg.activeProfileId,
+      'Model: ' + cfg.model,
+      'Lang: ' + cfg.lang,
+      'Temperature: ' + Number(cfg.temperature || 0).toFixed(2),
+      'Click to switch profile',
+    ].join('\n');
+    profileStatus.show();
+  };
+  refreshProfileStatus();
+
+  const loadChatHistory = () => normalizeHistoryMessages(context.globalState.get(getChatHistoryStorageKey(), []));
+  const saveChatHistory = async (messages) => {
+    const normalized = normalizeHistoryMessages(messages);
+    await context.globalState.update(getChatHistoryStorageKey(), normalized);
+    return normalized;
+  };
+  const loadSessionState = () => normalizeSessionState(context.workspaceState.get(CHAT_SESSION_STATE_KEY, null));
+  const saveSessionState = async (messages) => {
+    const state = buildSessionState(messages, selectedModel, activeSessionId);
+    await context.workspaceState.update(CHAT_SESSION_STATE_KEY, state);
+    return state;
+  };
+  const loadFavorites = () => normalizeFavorites(context.globalState.get(getFavoritesStorageKey(), []));
+  const saveFavorites = async (items) => {
+    const normalized = normalizeFavorites(items);
+    await context.globalState.update(getFavoritesStorageKey(), normalized);
+    return normalized;
+  };
 
   const inlineStatus = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 90);
   inlineStatus.text = 'Copilot Local';
   inlineStatus.tooltip = 'Inline completions status';
   inlineStatus.show();
   context.subscriptions.push(inlineStatus);
+
+  const qualityStatus = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 89);
+  qualityStatus.text = 'Quality OK';
+  qualityStatus.tooltip = 'Local quality alerts';
+  qualityStatus.hide();
+  context.subscriptions.push(qualityStatus);
+
+  const restored = loadSessionState();
+  if (restored.messages.length > 0 || restored.activeSessionId || restored.selectedModel) {
+    activeSessionId = restored.activeSessionId;
+    selectedModel = restored.selectedModel || selectedModel;
+    shouldShowRestoredBanner = true;
+    saveChatHistory(restored.messages).catch(() => {});
+  }
+
+  const evaluateQualityAlerts = async (source, hadError) => {
+    const cfg = getConfig();
+    if (!cfg.qualityAlertsEnabled) {
+      activeQualityAlerts.clear();
+      qualityStatus.hide();
+      return;
+    }
+
+    if (hadError) {
+      consecutiveErrors += 1;
+    } else {
+      consecutiveErrors = 0;
+    }
+
+    const snap = metrics.getSnapshot();
+    const nextAlerts = new Set();
+    if ((snap.avg_response_time_ms || 0) >= Math.max(1, Number(cfg.qualityLatencyThresholdMs) || 8000)) {
+      nextAlerts.add('latency');
+    }
+    if (consecutiveErrors >= Math.max(1, Number(cfg.qualityConsecutiveErrorsThreshold) || 3)) {
+      nextAlerts.add('errors');
+    }
+
+    for (const a of nextAlerts) {
+      if (!activeQualityAlerts.has(a)) {
+        if (a === 'latency') {
+          output.appendLine('[quality][warn] high latency detected in ' + source + ': avg=' + Math.round(snap.avg_response_time_ms || 0) + 'ms');
+        } else if (a === 'errors') {
+          output.appendLine('[quality][warn] consecutive errors detected in ' + source + ': count=' + consecutiveErrors);
+        }
+      }
+    }
+    for (const a of activeQualityAlerts) {
+      if (!nextAlerts.has(a)) {
+        output.appendLine('[quality][clear] alert resolved: ' + a);
+      }
+    }
+
+    activeQualityAlerts.clear();
+    for (const a of nextAlerts) activeQualityAlerts.add(a);
+
+    if (activeQualityAlerts.size === 0) {
+      qualityStatus.hide();
+      return;
+    }
+
+    qualityStatus.text = 'Quality ⚠ ' + Array.from(activeQualityAlerts).join('+');
+    qualityStatus.tooltip = [
+      'Avg latency: ' + Math.round(snap.avg_response_time_ms || 0) + ' ms (threshold: ' + Math.max(1, Number(cfg.qualityLatencyThresholdMs) || 8000) + ' ms)',
+      'Consecutive errors: ' + consecutiveErrors + ' (threshold: ' + Math.max(1, Number(cfg.qualityConsecutiveErrorsThreshold) || 3) + ')',
+    ].join('\n');
+    qualityStatus.show();
+  };
 
   const indexerStatus = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 90);
   indexerStatus.text = 'Indexer: ...';
@@ -525,6 +1359,56 @@ function activate(context) {
     }, undefined, metrics);
   };
 
+  const getAvailableModels = async () => {
+    const cfg = getConfig();
+    try {
+      const res = await getJSON('/api/models');
+      const models = Array.isArray(res?.models) ? res.models.filter((m) => String(m || '').trim()) : [];
+      if (models.length > 0) return models;
+    } catch {}
+    return [cfg.model || 'local-rag'];
+  };
+
+  const publishProfileToPanel = async () => {
+    if (!chatPanel) return;
+    const cfg = getConfig();
+    const models = await getAvailableModels();
+    const currentModel = selectedModel || cfg.model;
+    chatPanel.webview.postMessage({ type: 'models', models, current: currentModel });
+    chatPanel.webview.postMessage({
+      type: 'profileUpdate',
+      profile: {
+        id: cfg.activeProfileId,
+        model: currentModel,
+        lang: cfg.lang,
+        temperature: cfg.temperature,
+      },
+    });
+  };
+
+  const chooseTwoModels = async () => {
+    const models = await getAvailableModels();
+    if (models.length < 2) {
+      vscode.window.showErrorMessage('Se requieren al menos 2 modelos para comparar');
+      return null;
+    }
+
+    const first = await vscode.window.showQuickPick(models.map((m) => ({ label: m, value: m })), {
+      title: 'Compare Models',
+      placeHolder: 'Selecciona el primer modelo',
+    });
+    if (!first) return null;
+
+    const secondCandidates = models.filter((m) => m !== first.value);
+    const second = await vscode.window.showQuickPick(secondCandidates.map((m) => ({ label: m, value: m })), {
+      title: 'Compare Models',
+      placeHolder: 'Selecciona el segundo modelo',
+    });
+    if (!second) return null;
+
+    return [first.value, second.value];
+  };
+
   async function openChatPanel() {
     if (chatPanel) {
       chatPanel.reveal();
@@ -536,28 +1420,33 @@ function activate(context) {
       retainContextWhenHidden: true,
     });
 
-    chatPanel.webview.html = getChatPanelHTML(getConfig().chatFontSize);
+    const cfg = getConfig();
+    chatPanel.webview.html = getChatPanelHTML(cfg.chatFontSize, cfg.voiceInputEnabled);
 
-    const publishModels = async () => {
-      const cfg = getConfig();
-      try {
-        const res = await getJSON('/api/models');
-        chatPanel?.webview.postMessage({ type: 'models', models: res?.models || [], current: cfg.model });
-      } catch {
-        chatPanel?.webview.postMessage({ type: 'models', models: [cfg.model], current: cfg.model });
+    const publishHistory = () => {
+      const restoredState = loadSessionState();
+      const messages = restoredState.messages.length > 0 ? restoredState.messages : loadChatHistory();
+      chatPanel?.webview.postMessage({ type: 'hydrateHistory', messages });
+      if (shouldShowRestoredBanner) {
+        chatPanel?.webview.postMessage({ type: 'sessionRestored', text: 'session restored' });
+        shouldShowRestoredBanner = false;
       }
     };
-    publishModels();
+
+    await publishProfileToPanel();
+    publishHistory();
 
     chatPanel.webview.onDidReceiveMessage(async (msg) => {
       if (msg.type === 'chat') {
         const model = String(msg.model || getConfig().model);
+        selectedModel = model;
         if (activeSessionId) {
           const endpoint = '/api/sessions/' + encodeURIComponent(activeSessionId) + '/chat';
           try {
             const res = await postJSON(endpoint, { message: msg.text });
             if (res?.response) chatPanel?.webview.postMessage({ type: 'chunk', text: String(res.response) });
             chatPanel?.webview.postMessage({ type: 'done' });
+            await saveSessionState(loadChatHistory());
           } catch (err) {
             chatPanel?.webview.postMessage({ type: 'error', text: err instanceof Error ? err.message : String(err) });
           }
@@ -567,10 +1456,37 @@ function activate(context) {
         streamWithFallback(msg.text, model,
           (chunk) => chatPanel?.webview.postMessage({ type: 'chunk', text: chunk }),
           (err) => {
+            evaluateQualityAlerts('chat', !!err);
             if (err) chatPanel?.webview.postMessage({ type: 'error', text: err.message });
             else chatPanel?.webview.postMessage({ type: 'done' });
           },
         );
+        return;
+      }
+
+      if (msg.type === 'compare') {
+        const prompt = String(msg.text || '').trim();
+        if (!prompt) {
+          chatPanel?.webview.postMessage({ type: 'error', text: 'Prompt vacío para comparación' });
+          return;
+        }
+
+        const selected = await chooseTwoModels();
+        if (!selected) return;
+        const [leftModel, rightModel] = selected;
+
+        chatPanel?.webview.postMessage({ type: 'compareStart' });
+        try {
+          const [left, right] = await Promise.all([
+            requestChatCompletion(prompt, leftModel, metrics),
+            requestChatCompletion(prompt, rightModel, metrics),
+          ]);
+          await evaluateQualityAlerts('compare', false);
+          chatPanel?.webview.postMessage({ type: 'compareResult', prompt, left, right });
+        } catch (err) {
+          await evaluateQualityAlerts('compare', true);
+          chatPanel?.webview.postMessage({ type: 'error', text: err instanceof Error ? err.message : String(err) });
+        }
         return;
       }
 
@@ -596,6 +1512,50 @@ function activate(context) {
         }
         const doc = await vscode.workspace.openTextDocument({ content, language });
         await vscode.window.showTextDocument(doc, { preview: false });
+        return;
+      }
+
+      if (msg.type === 'historyUpdate') {
+        const normalized = await saveChatHistory(msg.messages);
+        await saveSessionState(normalized);
+        return;
+      }
+
+      if (msg.type === 'modelSelected') {
+        selectedModel = String(msg.model || '').trim() || getConfig().model;
+        await saveSessionState(loadChatHistory());
+        return;
+      }
+
+      if (msg.type === 'clearHistoryRequest') {
+        const confirmed = await vscode.window.showWarningMessage('¿Borrar historial de chat del workspace actual?', 'Clear', 'Cancel');
+        if (confirmed !== 'Clear') return;
+        await saveChatHistory([]);
+        await saveSessionState([]);
+        chatPanel?.webview.postMessage({ type: 'historyCleared' });
+        vscode.window.showInformationMessage('Historial de chat limpiado');
+        return;
+      }
+
+      if (msg.type === 'favoriteAdd') {
+        const content = String(msg.content || '').trim();
+        if (!content) return;
+
+        const favorites = loadFavorites();
+        const exists = favorites.some((f) => f.content.trim() === content);
+        if (exists) {
+          vscode.window.showInformationMessage('Este mensaje ya está en favoritos');
+          return;
+        }
+
+        favorites.push({
+          id: Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8),
+          title: buildFavoriteTitle(content),
+          content,
+          timestamp: Date.now(),
+        });
+        await saveFavorites(favorites);
+        vscode.window.showInformationMessage('Favorito guardado');
         return;
       }
 
@@ -662,6 +1622,7 @@ function activate(context) {
     streamWithFallback(text, getConfig().model,
       (chunk) => output.append(chunk),
       (err) => {
+        evaluateQualityAlerts('sendSelection', !!err);
         if (err) output.appendLine('\n[Error] ' + err.message);
         output.appendLine('\n--- Done ---');
       },
@@ -672,11 +1633,234 @@ function activate(context) {
     await openChatPanel();
   }));
 
+  context.subscriptions.push(vscode.commands.registerCommand('copilot-local.switchProfile', async () => {
+    const cfg = getConfig();
+    const profiles = cfg.profiles || {};
+    const picks = Object.entries(profiles).map(([id, p]) => ({
+      label: id,
+      description: id === cfg.activeProfileId ? 'activo' : '',
+      detail: 'model=' + p.model + ' | lang=' + p.lang + ' | temperature=' + Number(p.temperature || 0).toFixed(2),
+      value: { id, profile: p },
+    }));
+
+    const picked = await vscode.window.showQuickPick(picks, {
+      title: 'Switch Workspace Profile',
+      placeHolder: 'Selecciona perfil para este workspace',
+      matchOnDescription: true,
+      matchOnDetail: true,
+    });
+    if (!picked) return;
+
+    const wsCfg = vscode.workspace.getConfiguration('copilotLocal');
+    await wsCfg.update('workspaceActiveProfile', picked.value.id, vscode.ConfigurationTarget.Workspace);
+    await wsCfg.update('workspaceModel', picked.value.profile.model, vscode.ConfigurationTarget.Workspace);
+    await wsCfg.update('workspaceLang', picked.value.profile.lang, vscode.ConfigurationTarget.Workspace);
+    await wsCfg.update('workspaceTemperature', picked.value.profile.temperature, vscode.ConfigurationTarget.Workspace);
+    selectedModel = picked.value.profile.model;
+
+    refreshProfileStatus();
+    await publishProfileToPanel();
+    await saveSessionState(loadChatHistory());
+    vscode.window.showInformationMessage('Perfil cambiado a: ' + picked.value.id);
+  }));
+
+  context.subscriptions.push(vscode.commands.registerCommand('copilot-local.clearSessionState', async () => {
+    await context.workspaceState.update(CHAT_SESSION_STATE_KEY, null);
+    activeSessionId = '';
+    selectedModel = getConfig().model;
+    shouldShowRestoredBanner = false;
+    vscode.window.showInformationMessage('Session state cleared');
+  }));
+
   context.subscriptions.push(vscode.commands.registerCommand('copilot-local.sendSelectionToChat', async () => {
     const editor = vscode.window.activeTextEditor;
     const text = editor?.document.getText(editor.selection.isEmpty ? undefined : editor.selection) || '';
     const panel = await openChatPanel();
     if (text.trim()) panel.webview.postMessage({ type: 'prefill', text });
+  }));
+
+  context.subscriptions.push(vscode.commands.registerCommand('copilot-local.quickPrompt', async () => {
+    const editor = vscode.window.activeTextEditor;
+    const selected = editor?.document.getText(editor.selection.isEmpty ? undefined : editor.selection) || '';
+
+    const templates = getQuickPromptTemplates();
+    if (templates.length === 0) {
+      vscode.window.showInformationMessage('No hay plantillas configuradas');
+      return;
+    }
+
+    const lastId = context.workspaceState.get(QUICK_PROMPT_LAST_KEY, '');
+    const picks = templates.map((t) => ({
+      label: t.label,
+      description: t.source === 'custom' ? 'custom' : 'built-in',
+      detail: t.template,
+      value: t,
+    }));
+    const activeItem = picks.find((p) => p.value.id === lastId);
+
+    const picked = await vscode.window.showQuickPick(picks, {
+      title: 'Quick Prompt Templates',
+      placeHolder: 'Selecciona una plantilla para insertar en el chat',
+      matchOnDescription: true,
+      matchOnDetail: true,
+      activeItem,
+    });
+    if (!picked) return;
+
+    const finalPrompt = applyTemplateToSelection(picked.value.template, selected);
+    const panel = await openChatPanel();
+    panel.webview.postMessage({ type: 'prefill', text: finalPrompt });
+    await context.workspaceState.update(QUICK_PROMPT_LAST_KEY, picked.value.id);
+  }));
+
+  context.subscriptions.push(vscode.commands.registerCommand('copilot-local.searchHistory', async () => {
+    const history = loadChatHistory();
+    if (history.length === 0) {
+      vscode.window.showInformationMessage('No hay historial de chat para este workspace');
+      return;
+    }
+
+    const query = (await vscode.window.showInputBox({
+      title: 'Search Chat History',
+      prompt: 'Texto a buscar en mensajes previos (vacío para listar todo)',
+      ignoreFocusOut: true,
+    })) || '';
+
+    const q = query.trim().toLowerCase();
+    const filtered = q
+      ? history.filter((m) => String(m.content || '').toLowerCase().includes(q))
+      : history;
+
+    if (filtered.length === 0) {
+      vscode.window.showInformationMessage('No se encontraron coincidencias en el historial');
+      return;
+    }
+
+    const picks = filtered.slice(-200).reverse().map((m) => {
+      const text = String(m.content || '').replace(/\s+/g, ' ').trim();
+      const short = text.length > 120 ? text.slice(0, 120) + '…' : text;
+      return {
+        label: (m.role === 'assistant' ? 'AI' : 'You') + ': ' + short,
+        description: new Date(Number(m.timestamp || Date.now())).toLocaleString(),
+        detail: 'id: ' + m.id,
+        value: m,
+      };
+    });
+
+    const picked = await vscode.window.showQuickPick(picks, {
+      title: 'Search Chat History',
+      placeHolder: 'Selecciona un mensaje para abrir y resaltar en el chat',
+      matchOnDescription: true,
+      matchOnDetail: true,
+    });
+    if (!picked) return;
+
+    const panel = await openChatPanel();
+    panel.webview.postMessage({ type: 'hydrateHistory', messages: history });
+    panel.webview.postMessage({ type: 'highlightHistory', id: picked.value.id });
+  }));
+
+  context.subscriptions.push(vscode.commands.registerCommand('copilot-local.compareModels', async () => {
+    const panel = await openChatPanel();
+    panel.webview.postMessage({ type: 'openCompareMode' });
+
+    const editor = vscode.window.activeTextEditor;
+    const selected = editor?.document.getText(editor.selection.isEmpty ? undefined : editor.selection)?.trim() || '';
+    if (!selected) {
+      vscode.window.showInformationMessage('Selecciona texto o escribe un prompt en el chat para comparar modelos');
+      return;
+    }
+
+    panel.webview.postMessage({ type: 'prefill', text: selected });
+    const selectedModels = await chooseTwoModels();
+    if (!selectedModels) return;
+    const [leftModel, rightModel] = selectedModels;
+
+    panel.webview.postMessage({ type: 'compareStart' });
+    try {
+      const [left, right] = await Promise.all([
+        requestChatCompletion(selected, leftModel, metrics),
+        requestChatCompletion(selected, rightModel, metrics),
+      ]);
+      await evaluateQualityAlerts('compare-command', false);
+      panel.webview.postMessage({ type: 'compareResult', prompt: selected, left, right });
+    } catch (err) {
+      await evaluateQualityAlerts('compare-command', true);
+      panel.webview.postMessage({ type: 'error', text: err instanceof Error ? err.message : String(err) });
+    }
+  }));
+
+  context.subscriptions.push(vscode.commands.registerCommand('copilot-local.resetQualityAlerts', async () => {
+    consecutiveErrors = 0;
+    activeQualityAlerts.clear();
+    qualityStatus.hide();
+    output.appendLine('[quality][reset] quality alerts reset by user');
+    vscode.window.showInformationMessage('Quality alerts reset');
+  }));
+
+  context.subscriptions.push(vscode.commands.registerCommand('copilot-local.openFavorites', async () => {
+    let favorites = loadFavorites();
+    if (favorites.length === 0) {
+      vscode.window.showInformationMessage('No hay favoritos guardados en este workspace');
+      return;
+    }
+
+    while (favorites.length > 0) {
+      const picks = favorites.slice().reverse().map((f) => ({
+        label: f.title,
+        description: new Date(Number(f.timestamp || Date.now())).toLocaleString(),
+        detail: f.content.length > 140 ? f.content.slice(0, 140) + '…' : f.content,
+        value: f,
+      }));
+
+      const picked = await vscode.window.showQuickPick(picks, {
+        title: 'Favorites',
+        placeHolder: 'Selecciona un favorito',
+        matchOnDescription: true,
+        matchOnDetail: true,
+      });
+      if (!picked) return;
+
+      const action = await vscode.window.showQuickPick([
+        { label: 'Copy', value: 'copy' },
+        { label: 'Apply', value: 'apply' },
+        { label: 'Delete', value: 'delete' },
+      ], {
+        title: 'Favorites: ' + picked.value.title,
+        placeHolder: 'Elige una acción',
+      });
+      if (!action) return;
+
+      if (action.value === 'copy') {
+        await vscode.env.clipboard.writeText(picked.value.content);
+        vscode.window.showInformationMessage('Favorito copiado al portapapeles');
+        continue;
+      }
+
+      if (action.value === 'apply') {
+        const editor = vscode.window.activeTextEditor;
+        if (!editor) {
+          const doc = await vscode.workspace.openTextDocument({ content: picked.value.content, language: 'markdown' });
+          await vscode.window.showTextDocument(doc, { preview: false });
+        } else {
+          await editor.edit((editBuilder) => editBuilder.insert(editor.selection.active, picked.value.content));
+        }
+        continue;
+      }
+
+      if (action.value === 'delete') {
+        const confirmed = await vscode.window.showWarningMessage('¿Eliminar favorito seleccionado?', 'Delete', 'Cancel');
+        if (confirmed !== 'Delete') {
+          continue;
+        }
+        favorites = favorites.filter((f) => f.id !== picked.value.id);
+        await saveFavorites(favorites);
+        if (favorites.length === 0) {
+          vscode.window.showInformationMessage('No quedan favoritos en este workspace');
+          return;
+        }
+      }
+    }
   }));
 
   context.subscriptions.push(vscode.commands.registerCommand('copilot-local.explainSelection', async () => {
@@ -810,6 +1994,19 @@ function activate(context) {
     }
   }));
 
+  context.subscriptions.push(vscode.commands.registerCommand('copilot-local.explainTestFailure', async () => {
+    const ctx = await collectExplainTestFailureContext();
+    if (!ctx) {
+      vscode.window.showInformationMessage('No hay salida de test para analizar');
+      return;
+    }
+
+    const panel = await openChatPanel();
+    panel.webview.postMessage({ type: 'regressionDraft', text: ctx.regressionPrompt });
+    panel.webview.postMessage({ type: 'runPrompt', text: ctx.prompt });
+    vscode.window.showInformationMessage('Analisis de test failure enviado al chat (' + ctx.source + ')');
+  }));
+
   context.subscriptions.push(vscode.commands.registerCommand('copilot-local.joinSession', async () => {
     const sessionId = await vscode.window.showInputBox({ title: 'Join Shared Session', prompt: 'Ingresa session_id', ignoreFocusOut: true });
     if (!sessionId || !sessionId.trim()) return;
@@ -819,6 +2016,7 @@ function activate(context) {
       const endpoint = '/api/sessions/' + encodeURIComponent(cleanID) + '/join';
       await postJSON(endpoint, {});
       activeSessionId = cleanID;
+      await saveSessionState(loadChatHistory());
       const panel = await openChatPanel();
       panel.webview.postMessage({ type: 'externalResult', text: 'Connected to shared session: ' + cleanID });
     } catch (err) {
@@ -891,6 +2089,14 @@ function activate(context) {
     const panel = vscode.window.createWebviewPanel('copilotLocalStats', 'Copilot Local Stats', vscode.ViewColumn.Beside, { enableScripts: false });
     const text = metrics.summaryText();
     panel.webview.html = '<!doctype html><html><body style="font-family: var(--vscode-editor-font-family); background: var(--vscode-editor-background); color: var(--vscode-editor-foreground); padding: 16px;"><h3>Copilot Local Stats</h3><pre>' + text.replace(/&/g, '&amp;').replace(/</g, '&lt;') + '</pre></body></html>';
+  }));
+
+  context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(async (event) => {
+    if (!event.affectsConfiguration('copilotLocal')) return;
+    selectedModel = getConfig().model;
+    refreshProfileStatus();
+    await publishProfileToPanel();
+    await saveSessionState(loadChatHistory());
   }));
 }
 

@@ -36,6 +36,8 @@ import (
 	patchtransport "ollama-gateway/internal/function/patch/transport"
 	profileservice "ollama-gateway/internal/function/profile"
 	profiletransport "ollama-gateway/internal/function/profile/transport"
+	releaseservice "ollama-gateway/internal/function/release"
+	releasetransport "ollama-gateway/internal/function/release/transport"
 	reposervice "ollama-gateway/internal/function/repo"
 	repotransport "ollama-gateway/internal/function/repo/transport"
 	reviewservice "ollama-gateway/internal/function/review"
@@ -47,6 +49,8 @@ import (
 	sessiontransport "ollama-gateway/internal/function/session/transport"
 	sqlgenservice "ollama-gateway/internal/function/sqlgen"
 	sqlgentransport "ollama-gateway/internal/function/sqlgen/transport"
+	techdebtservice "ollama-gateway/internal/function/techdebt"
+	techdebttransport "ollama-gateway/internal/function/techdebt/transport"
 	testgenservice "ollama-gateway/internal/function/testgen"
 	testgentransport "ollama-gateway/internal/function/testgen/transport"
 	translatorservice "ollama-gateway/internal/function/translator"
@@ -116,6 +120,7 @@ func GetRouteDefinitions() []RouteDefinition {
 		{Method: "POST", Path: "/api/cicd/optimize", Description: "Optimizar pipeline CI/CD", ExampleBody: "{\n  \"platform\": \"gitlab-ci\",\n  \"pipeline\": \"stages: [test]\"\n}", Protected: true},
 		{Method: "POST", Path: "/api/commit/message", Description: "Generar commit message desde diff", ExampleBody: "{\n  \"diff\": \"diff --git ...\"\n}", Protected: true},
 		{Method: "POST", Path: "/api/commit/staged", Description: "Generar commit message desde staged", ExampleBody: "{\n  \"repo_root\": \".\"\n}", Protected: true},
+		{Method: "POST", Path: "/api/release/notes", Description: "Generar release notes entre dos referencias git", ExampleBody: "{\n  \"fromRef\": \"v1.0.0\",\n  \"toRef\": \"v1.1.0\",\n  \"apply\": false\n}", Protected: true},
 		{Method: "GET", Path: "/api/architect/analyze", Description: "Analisis de arquitectura", ExampleBody: "", Protected: true},
 		{Method: "POST", Path: "/api/architect/refactor", Description: "Sugerencia de refactor", ExampleBody: "{\n  \"path\": \"api/internal/function/core/router.go\"\n}", Protected: true},
 		{Method: "POST", Path: "/api/sessions", Description: "Crear sesion compartida", ExampleBody: "{}", Protected: true},
@@ -124,6 +129,7 @@ func GetRouteDefinitions() []RouteDefinition {
 		{Method: "POST", Path: "/api/sessions/{id}/chat", Description: "Enviar chat a sesion", ExampleBody: "{\n  \"message\": \"hola equipo\"\n}", Protected: true},
 		{Method: "POST", Path: "/api/security/scan/file", Description: "Escanear seguridad de archivo", ExampleBody: "{\n  \"path\": \"api/internal/server/server.go\"\n}", Protected: true},
 		{Method: "POST", Path: "/api/security/scan/repo", Description: "Escanear seguridad del repo", ExampleBody: "{}", Protected: true},
+		{Method: "GET", Path: "/api/techdebt/priorities", Description: "Priorizar deuda técnica por señales de riesgo", ExampleBody: "", Protected: true},
 		{Method: "POST", Path: "/api/v1/chat/completions", Description: "Chat completions interno", ExampleBody: "{\n  \"model\": \"llama3\",\n  \"messages\": [{\"role\":\"user\",\"content\":\"hola\"}]\n}", Protected: true},
 		{Method: "GET", Path: "/api/profile", Description: "Obtener perfil", ExampleBody: "", Protected: true},
 		{Method: "PUT", Path: "/api/profile", Description: "Actualizar perfil", ExampleBody: "{\n  \"default_model\": \"llama3\"\n}", Protected: true},
@@ -198,8 +204,10 @@ func (s *Server) setupRoutes() {
 	sqlGenService := sqlgenservice.NewService(ragService, s.cfg.RepoRoot, logger)
 	cicdService := cicdservice.NewService(ragService, s.cfg.RepoRoot, logger)
 	commitGenService := commitgenservice.NewService(ragService, s.cfg.RepoRoot, logger)
+	releaseService := releaseservice.NewService(s.cfg.RepoRoot)
 	sessionService := sessionservice.NewService()
 	securityService := securityservice.NewService(ragService, s.cfg.RepoRoot, logger)
+	techDebtService := techdebtservice.NewService(s.cfg.RepoRoot, logger)
 	indexerService, _ := indexerservice.NewService(repoRoots, s.cfg.IndexerStatePath, ollamaService, qdrantService, logger)
 	indexerService.SetOnContentChange(ragService.InvalidateResponseCache)
 	indexerService.SetOnFileIndexed(func(path string) {
@@ -245,8 +253,10 @@ func (s *Server) setupRoutes() {
 	sqlGenHandler := sqlgentransport.NewHandler(sqlGenService)
 	cicdHandler := cicdtransport.NewHandler(cicdService)
 	commitGenHandler := commitgentransport.NewHandler(commitGenService)
+	releaseHandler := releasetransport.NewHandler(releaseService)
 	sessionHandler := sessiontransport.NewHandler(sessionService, ragEngine)
 	securityHandler := securitytransport.NewHandler(securityService)
+	techDebtHandler := techdebttransport.NewHandler(techDebtService)
 	architectHandler := architecttransport.NewHandler(architectService)
 	profileHandler := profiletransport.NewHandler(s.profileService)
 	patchHandler := patchtransport.NewHandler(s.cfg.RepoRoot, patchService)
@@ -316,6 +326,7 @@ func (s *Server) setupRoutes() {
 	mux.Handle("POST /api/cicd/optimize", authMiddleware.JWT(http.HandlerFunc(cicdHandler.OptimizePipeline)))
 	mux.Handle("POST /api/commit/message", authMiddleware.JWT(http.HandlerFunc(commitGenHandler.Message)))
 	mux.Handle("POST /api/commit/staged", authMiddleware.JWT(http.HandlerFunc(commitGenHandler.Staged)))
+	mux.Handle("POST /api/release/notes", authMiddleware.JWT(http.HandlerFunc(releaseHandler.BuildNotes)))
 	mux.Handle("GET /api/architect/analyze", authMiddleware.JWT(http.HandlerFunc(architectHandler.AnalyzeProject)))
 	mux.Handle("POST /api/architect/refactor", authMiddleware.JWT(http.HandlerFunc(architectHandler.SuggestRefactor)))
 	mux.Handle("POST /api/sessions", authMiddleware.JWT(http.HandlerFunc(sessionHandler.Create)))
@@ -324,6 +335,7 @@ func (s *Server) setupRoutes() {
 	mux.Handle("POST /api/sessions/{id}/chat", authMiddleware.JWT(http.HandlerFunc(sessionHandler.Chat)))
 	mux.Handle("POST /api/security/scan/file", authMiddleware.JWT(http.HandlerFunc(securityHandler.ScanFile)))
 	mux.Handle("POST /api/security/scan/repo", authMiddleware.JWT(http.HandlerFunc(securityHandler.ScanRepo)))
+	mux.Handle("GET /api/techdebt/priorities", authMiddleware.JWT(http.HandlerFunc(techDebtHandler.Priorities)))
 	mux.Handle("POST /api/v1/chat/completions", authMiddleware.JWT(http.HandlerFunc(chatHandler.Handle)))
 	mux.Handle("GET /api/profile", authMiddleware.JWT(http.HandlerFunc(profileHandler.Get)))
 	mux.Handle("PUT /api/profile", authMiddleware.JWT(http.HandlerFunc(profileHandler.Put)))

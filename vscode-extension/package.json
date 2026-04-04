@@ -18,7 +18,15 @@
     "onCommand:copilot-local.reindex",
     "onCommand:copilot-local.showStats",
     "onCommand:copilot-local.joinSession",
-    "onCommand:copilot-local.commitMessage"
+    "onCommand:copilot-local.commitMessage",
+    "onCommand:copilot-local.quickPrompt",
+    "onCommand:copilot-local.searchHistory",
+    "onCommand:copilot-local.compareModels",
+    "onCommand:copilot-local.openFavorites",
+    "onCommand:copilot-local.resetQualityAlerts",
+    "onCommand:copilot-local.switchProfile",
+    "onCommand:copilot-local.clearSessionState",
+    "onCommand:copilot-local.explainTestFailure"
   ],
   "main": "extension.js",
   "contributes": {
@@ -70,6 +78,38 @@
       {
         "command": "copilot-local.commitMessage",
         "title": "Copilot Local: Suggest Commit Message"
+      },
+      {
+        "command": "copilot-local.quickPrompt",
+        "title": "Copilot Local: Quick Prompt"
+      },
+      {
+        "command": "copilot-local.searchHistory",
+        "title": "Copilot Local: Search Chat History"
+      },
+      {
+        "command": "copilot-local.compareModels",
+        "title": "Copilot Local: Compare Models"
+      },
+      {
+        "command": "copilot-local.openFavorites",
+        "title": "Copilot Local: Open Favorites"
+      },
+      {
+        "command": "copilot-local.resetQualityAlerts",
+        "title": "Copilot Local: Reset Quality Alerts"
+      },
+      {
+        "command": "copilot-local.switchProfile",
+        "title": "Copilot Local: Switch Workspace Profile"
+      },
+      {
+        "command": "copilot-local.clearSessionState",
+        "title": "Copilot Local: Clear Session State"
+      },
+      {
+        "command": "copilot-local.explainTestFailure",
+        "title": "Copilot Local: Explain Test Failure"
       }
     ],
     "keybindings": [
@@ -138,6 +178,34 @@
         {
           "command": "copilot-local.fixErrors",
           "group": "1_main"
+        },
+        {
+          "command": "copilot-local.quickPrompt",
+          "group": "1_main"
+        },
+        {
+          "command": "copilot-local.compareModels",
+          "group": "1_main"
+        },
+        {
+          "command": "copilot-local.openFavorites",
+          "group": "1_main"
+        },
+        {
+          "command": "copilot-local.switchProfile",
+          "group": "1_main"
+        },
+        {
+          "command": "copilot-local.clearSessionState",
+          "group": "2_tools"
+        },
+        {
+          "command": "copilot-local.explainTestFailure",
+          "group": "2_tools"
+        },
+        {
+          "command": "copilot-local.resetQualityAlerts",
+          "group": "2_tools"
         }
       ]
     },
@@ -153,6 +221,52 @@
           "type": "string",
           "default": "local-rag",
           "description": "Default model to request"
+        },
+        "copilotLocal.workspaceModel": {
+          "type": "string",
+          "default": "",
+          "scope": "resource",
+          "description": "Workspace-scoped model override for the active profile"
+        },
+        "copilotLocal.workspaceLang": {
+          "type": "string",
+          "default": "",
+          "scope": "resource",
+          "description": "Workspace-scoped response language override for the active profile"
+        },
+        "copilotLocal.workspaceTemperature": {
+          "type": "number",
+          "default": 0.3,
+          "scope": "resource",
+          "description": "Workspace-scoped temperature override for the active profile"
+        },
+        "copilotLocal.workspaceActiveProfile": {
+          "type": "string",
+          "default": "balanced",
+          "scope": "resource",
+          "description": "Active workspace profile id"
+        },
+        "copilotLocal.workspaceProfiles": {
+          "type": "object",
+          "scope": "resource",
+          "default": {
+            "fast": {
+              "model": "local-rag",
+              "lang": "es",
+              "temperature": 0.1
+            },
+            "balanced": {
+              "model": "local-rag",
+              "lang": "es",
+              "temperature": 0.3
+            },
+            "deep-analysis": {
+              "model": "local-rag",
+              "lang": "es",
+              "temperature": 0.6
+            }
+          },
+          "description": "Workspace-scoped profile presets. Each profile supports model/lang/temperature"
         },
         "copilotLocal.cliPath": {
           "type": "string",
@@ -173,6 +287,31 @@
           "type": "number",
           "default": 13,
           "description": "Font size used in chat panel"
+        },
+        "copilotLocal.voiceInputEnabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable voice dictation in the chat panel when Web Speech API is available"
+        },
+        "copilotLocal.quickPromptTemplates": {
+          "type": "object",
+          "default": {},
+          "description": "Custom quick prompt templates as JSON object, e.g. { \"review\": \"Review this code:\\n{{selection}}\" }"
+        },
+        "copilotLocal.qualityAlertsEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable local quality alerts based on latency and consecutive errors"
+        },
+        "copilotLocal.qualityLatencyThresholdMs": {
+          "type": "number",
+          "default": 8000,
+          "description": "Latency threshold in ms for quality warnings"
+        },
+        "copilotLocal.qualityConsecutiveErrorsThreshold": {
+          "type": "number",
+          "default": 3,
+          "description": "Consecutive error threshold for quality warnings"
         }
       }
     }
