@@ -1,0 +1,33 @@
+services:
+  mongo:
+    image: mongo:7
+    ports:
+      - "127.0.0.1:${IT_MONGO_PORT:-27018}:27017"
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=${IT_MONGO_USER:-admin}
+      - MONGO_INITDB_ROOT_PASSWORD=${IT_MONGO_PASSWORD:-integration}
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "${IT_QDRANT_PORT:-6334}:6333"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:6333/"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "${IT_OLLAMA_PORT:-11435}:11434"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:11434/"]
+      interval: 5s
+      timeout: 5s
+      retries: 30

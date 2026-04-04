@@ -56,8 +56,10 @@ type CICDService interface {
 type SessionService interface {
 	Create(ownerID string) (*ChatSession, error)
 	Join(sessionID, userID string) error
-	AddMessage(sessionID string, msg Message) error
-	GetMessages(sessionID string, since time.Time) ([]Message, error)
+	AddMessage(sessionID, userID string, msg Message) error
+	GetMessages(sessionID, userID string, since time.Time) ([]Message, error)
+	SetParticipantRole(sessionID, actorID, targetUserID, role string) error
+	GetSession(sessionID string) (*ChatSession, error)
 }
 
 type DocGenService interface {

@@ -72,6 +72,58 @@ go test ./...
 - `POST /api/generate` — endpoint RAG protegido (JWT)
 - `POST /internal/index/reindex` — operator endpoint para reindexar
 
+## Versionado de API y migración de clientes
+
+Se introdujeron rutas versionadas bajo `/api/v1` y `/api/v2` para la evolución de contratos.
+
+- Compatibilidad backward: los endpoints legacy (`/api/...`) siguen activos.
+- Deprecación de legacy: respuestas legacy incluyen headers de deprecación y fecha objetivo de migración.
+- Fecha objetivo de sunset para legacy: `2026-12-31`.
+
+### Headers de deprecación en rutas legacy
+
+- `Deprecation: true`
+- `X-API-Deprecated: true`
+- `X-API-Sunset-Date: 2026-12-31`
+- `Sunset: 2026-12-31T23:59:59Z`
+- `Link: </api/v2/...>; rel="successor-version"`
+- `Warning: 299 - "Deprecated API: migrate to /api/v2/... before 2026-12-31"`
+
+### Mapeo recomendado de rutas
+
+- `POST /api/generate` -> `POST /api/v2/generate`
+- `POST /api/search` -> `POST /api/v2/search`
+- `POST /api/models/recommend` -> `POST /api/v2/models/recommend`
+- `POST /api/v1/chat/completions` -> `POST /api/v2/chat/completions`
+- `GET|PUT /api/profile` -> `GET|PUT /api/v2/profile`
+
+### Traducción de campos deprecados (capa de compatibilidad en v2)
+
+En rutas `v2` se aceptan aliases legacy y se traducen automáticamente al contrato actual. Cuando sucede, la respuesta incluye `X-API-Translated-Fields`.
+
+- `POST /api/v2/generate`:
+- `query` -> `prompt`
+- `input` -> `prompt`
+
+- `POST /api/v2/search`:
+- `top_k` -> `top`
+- `k` -> `top`
+- `q` -> `query`
+
+- `POST /api/v2/models/recommend`:
+- `task` -> `task_type`
+- `sla_ms` -> `sla_latency_ms`
+- `budget_tokens` -> `token_budget`
+
+### Guía rápida de migración de cliente
+
+1. Cambia base paths de endpoints críticos a `/api/v2/...`.
+2. Mantén payload actual; si aún envías campos legacy, `v2` los traduce temporalmente.
+3. Observa `X-API-Translated-Fields` para eliminar aliases en cliente.
+4. Deja de consumir rutas legacy antes de `2026-12-31`.
+
 ---
 
 Para detalles de arquitectura, desarrollo y prompts listos para Copilot, revisa la carpeta `docs/futuro/`.
+
+Guía detallada de versionado y migración: `docs/API_VERSIONING.md`.

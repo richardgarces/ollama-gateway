@@ -14,6 +14,7 @@ import (
 
 	"ollama-gateway/internal/config"
 	"ollama-gateway/internal/function/core/domain"
+	"ollama-gateway/internal/function/resilience"
 	"ollama-gateway/pkg/cache"
 	"ollama-gateway/pkg/httpclient"
 )
@@ -26,6 +27,13 @@ type OllamaService struct {
 	maxCacheSize int
 	logger       *slog.Logger
 	offline      bool
+	breaker      *resilience.CircuitBreaker
+	embeddingSem chan struct{}
+	poolObserver interface {
+		RegisterPool(name string, capacity int)
+		ObservePoolAcquire(name string, waited bool)
+		ObservePoolRelease(name string)
+	}
 }
 
 var _ domain.OllamaClient = (*OllamaService)(nil)
@@ -42,16 +50,42 @@ func NewOllamaService(cfg *config.Config, logger *slog.Logger, embeddingCache ca
 	s := &OllamaService{
 		baseURL: cfg.OllamaURL,
 		client: httpclient.NewResilientClient(httpclient.Options{
-			Timeout:    time.Duration(cfg.HTTPTimeoutSeconds) * time.Second,
-			MaxRetries: cfg.HTTPMaxRetries,
+			Timeout:             time.Duration(cfg.PoolTimeoutSeconds) * time.Second,
+			MaxRetries:          cfg.HTTPMaxRetries,
+			MaxConnsPerHost:     cfg.PoolMaxOpen,
+			MaxIdleConns:        cfg.PoolMaxOpen,
+			MaxIdleConnsPerHost: cfg.PoolMaxIdle,
+			IdleConnTimeout:     time.Duration(cfg.PoolTimeoutSeconds) * time.Second,
+			DialTimeout:         time.Duration(cfg.PoolTimeoutSeconds) * time.Second,
 		}),
 		cache:        embeddingCache,
 		cacheTTL:     ttl,
 		maxCacheSize: max,
 		logger:       logger,
+		breaker: resilience.NewCircuitBreaker(resilience.Config{
+			Name:               "ollama",
+			FailureThreshold:   circuitThreshold(cfg.CBOllamaThreshold, cfg.CBFailureThreshold),
+			OpenTimeout:        time.Duration(cfg.CBOpenTimeoutSeconds) * time.Second,
+			HalfOpenMaxSuccess: cfg.CBHalfOpenMaxSuccess,
+		}),
+		embeddingSem: make(chan struct{}, maxPoolSize(cfg.EmbeddingPoolSize, 8)),
 	}
 	s.initializeAvailability()
 	return s
+}
+
+func (s *OllamaService) SetPoolObserver(observer interface {
+	RegisterPool(name string, capacity int)
+	ObservePoolAcquire(name string, waited bool)
+	ObservePoolRelease(name string)
+}) {
+	if s == nil {
+		return
+	}
+	s.poolObserver = observer
+	if observer != nil {
+		observer.RegisterPool("embedding", cap(s.embeddingSem))
+	}
 }
 
 func (s *OllamaService) initializeAvailability() {
@@ -64,6 +98,13 @@ func (s *OllamaService) initializeAvailability() {
 }
 
 func (s *OllamaService) Ping() bool {
+	if s.breaker != nil {
+		if snap := s.breaker.Snapshot(); snap.State == resilience.StateOpen {
+			if err := s.breaker.Execute(context.Background(), func(context.Context) error { return nil }); err != nil {
+				return false
+			}
+		}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(s.baseURL, "/")+"/", nil)
@@ -79,26 +120,32 @@ func (s *OllamaService) Ping() bool {
 }
 
 func (s *OllamaService) ListModels() ([]string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(s.baseURL, "/")+"/api/tags", nil)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := s.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("Ollama is not available. Check that the service is running.")
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Ollama is not available. Check that the service is running.")
-	}
 	var out struct {
 		Models []struct {
 			Name string `json:"name"`
 		} `json:"models"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	err := s.withBreaker(context.Background(), func(ctx context.Context) error {
+		reqCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		req, reqErr := http.NewRequestWithContext(reqCtx, http.MethodGet, strings.TrimRight(s.baseURL, "/")+"/api/tags", nil)
+		if reqErr != nil {
+			return reqErr
+		}
+		resp, doErr := s.client.Do(req)
+		if doErr != nil {
+			return fmt.Errorf("Ollama is not available. Check that the service is running.")
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("Ollama is not available. Check that the service is running.")
+		}
+		if decodeErr := json.NewDecoder(resp.Body).Decode(&out); decodeErr != nil {
+			return decodeErr
+		}
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
 	models := make([]string, 0, len(out.Models))
@@ -134,19 +181,25 @@ func (s *OllamaService) Generate(model, prompt string) (string, error) {
 		return "", err
 	}
 
-	resp, err := s.client.Post(s.baseURL+"/api/generate", "application/json", bytes.NewBuffer(data))
-	if err != nil {
-		return "", fmt.Errorf("Ollama is not available. Check that the service is running.")
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("ollama returned status %d", resp.StatusCode)
-	}
-
 	var result domain.OllamaResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", fmt.Errorf("ollama decode error: %w", err)
+	err = s.withBreaker(context.Background(), func(ctx context.Context) error {
+		resp, postErr := s.client.Post(s.baseURL+"/api/generate", "application/json", bytes.NewBuffer(data))
+		if postErr != nil {
+			return fmt.Errorf("Ollama is not available. Check that the service is running.")
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("ollama returned status %d", resp.StatusCode)
+		}
+
+		if decodeErr := json.NewDecoder(resp.Body).Decode(&result); decodeErr != nil {
+			return fmt.Errorf("ollama decode error: %w", decodeErr)
+		}
+		return nil
+	})
+	if err != nil {
+		return "", err
 	}
 
 	return result.Response, nil
@@ -167,37 +220,39 @@ func (s *OllamaService) StreamGenerate(model, prompt string, onChunk func(string
 		return err
 	}
 
-	resp, err := s.client.Post(s.baseURL+"/api/generate", "application/json", bytes.NewBuffer(data))
-	if err != nil {
-		return fmt.Errorf("Ollama is not available. Check that the service is running.")
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("ollama returned status %d", resp.StatusCode)
-	}
-
-	decoder := json.NewDecoder(resp.Body)
-	for {
-		var chunk struct {
-			Response string `json:"response"`
-			Done     bool   `json:"done"`
+	return s.withBreaker(context.Background(), func(ctx context.Context) error {
+		resp, postErr := s.client.Post(s.baseURL+"/api/generate", "application/json", bytes.NewBuffer(data))
+		if postErr != nil {
+			return fmt.Errorf("Ollama is not available. Check that the service is running.")
 		}
-		if err := decoder.Decode(&chunk); err != nil {
-			if err == io.EOF {
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("ollama returned status %d", resp.StatusCode)
+		}
+
+		decoder := json.NewDecoder(resp.Body)
+		for {
+			var chunk struct {
+				Response string `json:"response"`
+				Done     bool   `json:"done"`
+			}
+			if decodeErr := decoder.Decode(&chunk); decodeErr != nil {
+				if decodeErr == io.EOF {
+					return nil
+				}
+				return fmt.Errorf("ollama streaming decode error: %w", decodeErr)
+			}
+			if chunk.Response != "" {
+				if streamErr := onChunk(chunk.Response); streamErr != nil {
+					return streamErr
+				}
+			}
+			if chunk.Done {
 				return nil
 			}
-			return fmt.Errorf("ollama streaming decode error: %w", err)
 		}
-		if chunk.Response != "" {
-			if err := onChunk(chunk.Response); err != nil {
-				return err
-			}
-		}
-		if chunk.Done {
-			return nil
-		}
-	}
+	})
 }
 
 // (no local buffer helpers; using bytes.NewBuffer and standard io)
@@ -215,6 +270,13 @@ func (s *OllamaService) GetEmbedding(model, text string) ([]float64, error) {
 		s.logger.Warn("embedding cache read falló", slog.String("service", "ollama"), slog.Any("error", err))
 	}
 
+	waited := s.acquireEmbeddingSlot()
+	defer s.releaseEmbeddingSlot()
+	if s.poolObserver != nil {
+		s.poolObserver.ObservePoolAcquire("embedding", waited)
+		defer s.poolObserver.ObservePoolRelease("embedding")
+	}
+
 	reqBody := map[string]interface{}{
 		"model":  model,
 		"prompt": text,
@@ -225,21 +287,27 @@ func (s *OllamaService) GetEmbedding(model, text string) ([]float64, error) {
 		return nil, err
 	}
 
-	resp, err := s.client.Post(s.baseURL+"/api/embeddings", "application/json", bytes.NewBuffer(data))
-	if err != nil {
-		return nil, fmt.Errorf("Ollama is not available. Check that the service is running.")
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("ollama returned status %d", resp.StatusCode)
-	}
-
 	var result struct {
 		Embedding []float64 `json:"embedding"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("ollama embedding decode error: %w", err)
+	err = s.withBreaker(context.Background(), func(ctx context.Context) error {
+		resp, postErr := s.client.Post(s.baseURL+"/api/embeddings", "application/json", bytes.NewBuffer(data))
+		if postErr != nil {
+			return fmt.Errorf("Ollama is not available. Check that the service is running.")
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("ollama returned status %d", resp.StatusCode)
+		}
+
+		if decodeErr := json.NewDecoder(resp.Body).Decode(&result); decodeErr != nil {
+			return fmt.Errorf("ollama embedding decode error: %w", decodeErr)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	if raw, err := json.Marshal(result.Embedding); err == nil {
@@ -249,4 +317,61 @@ func (s *OllamaService) GetEmbedding(model, text string) ([]float64, error) {
 	}
 
 	return result.Embedding, nil
+}
+
+func (s *OllamaService) CircuitBreakerState() resilience.Snapshot {
+	if s == nil || s.breaker == nil {
+		return resilience.Snapshot{Name: "ollama", State: resilience.StateClosed}
+	}
+	return s.breaker.Snapshot()
+}
+
+func (s *OllamaService) withBreaker(ctx context.Context, op func(context.Context) error) error {
+	if s == nil || s.breaker == nil {
+		return op(ctx)
+	}
+	return s.breaker.Execute(ctx, op)
+}
+
+func circuitThreshold(providerThreshold, fallback int) int {
+	if providerThreshold > 0 {
+		return providerThreshold
+	}
+	if fallback > 0 {
+		return fallback
+	}
+	return 3
+}
+
+func maxPoolSize(v, fallback int) int {
+	if v > 0 {
+		return v
+	}
+	if fallback > 0 {
+		return fallback
+	}
+	return 8
+}
+
+func (s *OllamaService) acquireEmbeddingSlot() bool {
+	if s == nil || s.embeddingSem == nil {
+		return false
+	}
+	select {
+	case s.embeddingSem <- struct{}{}:
+		return false
+	default:
+		s.embeddingSem <- struct{}{}
+		return true
+	}
+}
+
+func (s *OllamaService) releaseEmbeddingSlot() {
+	if s == nil || s.embeddingSem == nil {
+		return
+	}
+	select {
+	case <-s.embeddingSem:
+	default:
+	}
 }

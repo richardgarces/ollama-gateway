@@ -2,6 +2,7 @@ package service
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"ollama-gateway/internal/function/core/domain"
+	"ollama-gateway/internal/function/resilience"
 	"ollama-gateway/pkg/httpclient"
 )
 
@@ -18,19 +20,34 @@ type QdrantService struct {
 	local       *diskVectorStore
 	preferLocal bool
 	logger      *slog.Logger
+	breaker     *resilience.CircuitBreaker
 }
 
 var _ domain.VectorStore = (*QdrantService)(nil)
 
-func NewQdrantService(baseURL string, repoRoot string, storePath string, preferLocal bool, timeoutSeconds int, maxRetries int, logger *slog.Logger) *QdrantService {
+func NewQdrantService(baseURL string, repoRoot string, storePath string, preferLocal bool, timeoutSeconds int, maxRetries int, cbThreshold int, cbOpenTimeoutSeconds int, cbHalfOpenMaxSuccess int, poolMaxOpen int, poolMaxIdle int, poolTimeoutSeconds int, logger *slog.Logger) *QdrantService {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	service := &QdrantService{
-		baseURL:     baseURL,
-		client:      httpclient.NewResilientClient(httpclient.Options{Timeout: time.Duration(timeoutSeconds) * time.Second, MaxRetries: maxRetries}),
+		baseURL: baseURL,
+		client: httpclient.NewResilientClient(httpclient.Options{
+			Timeout:             time.Duration(poolTimeoutSeconds) * time.Second,
+			MaxRetries:          maxRetries,
+			MaxConnsPerHost:     poolMaxOpen,
+			MaxIdleConns:        poolMaxOpen,
+			MaxIdleConnsPerHost: poolMaxIdle,
+			IdleConnTimeout:     time.Duration(poolTimeoutSeconds) * time.Second,
+			DialTimeout:         time.Duration(timeoutSeconds) * time.Second,
+		}),
 		preferLocal: preferLocal,
 		logger:      logger,
+		breaker: resilience.NewCircuitBreaker(resilience.Config{
+			Name:               "qdrant",
+			FailureThreshold:   cbThreshold,
+			OpenTimeout:        time.Duration(cbOpenTimeoutSeconds) * time.Second,
+			HalfOpenMaxSuccess: cbHalfOpenMaxSuccess,
+		}),
 	}
 	localStore, err := newDiskVectorStore(repoRoot, storePath)
 	if err != nil {
@@ -65,21 +82,23 @@ func (q *QdrantService) UpsertPoint(collection string, id string, vector []float
 	if err != nil {
 		return err
 	}
-	resp, err := q.client.Post(url, "application/json", bytes.NewBuffer(data))
+	err = q.withBreaker(context.Background(), func(ctx context.Context) error {
+		resp, postErr := q.client.Post(url, "application/json", bytes.NewBuffer(data))
+		if postErr != nil {
+			return postErr
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode >= 300 {
+			return fmt.Errorf("qdrant upsert failed status %d", resp.StatusCode)
+		}
+		return nil
+	})
 	if err != nil {
 		if q.local != nil {
 			q.logger.Warn("qdrant upsert falló, usando persistencia local", slog.String("service", "qdrant"), slog.Any("error", err))
 			return nil
 		}
 		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
-		if q.local != nil {
-			q.logger.Warn("qdrant upsert devolvió status, usando persistencia local", slog.String("service", "qdrant"), slog.Int("status", resp.StatusCode))
-			return nil
-		}
-		return fmt.Errorf("qdrant upsert failed status %d", resp.StatusCode)
 	}
 	return nil
 }
@@ -101,7 +120,21 @@ func (q *QdrantService) Search(collection string, vector []float64, limit int) (
 	if err != nil {
 		return nil, err
 	}
-	resp, err := q.client.Post(url, "application/json", bytes.NewBuffer(data))
+	var result map[string]interface{}
+	err = q.withBreaker(context.Background(), func(ctx context.Context) error {
+		resp, postErr := q.client.Post(url, "application/json", bytes.NewBuffer(data))
+		if postErr != nil {
+			return postErr
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode >= 300 {
+			return fmt.Errorf("qdrant search failed status %d", resp.StatusCode)
+		}
+		if decodeErr := json.NewDecoder(resp.Body).Decode(&result); decodeErr != nil {
+			return decodeErr
+		}
+		return nil
+	})
 	if err != nil {
 		if q.local != nil {
 			q.logger.Warn("qdrant search falló, usando vector store local", slog.String("service", "qdrant"), slog.Any("error", err))
@@ -109,21 +142,19 @@ func (q *QdrantService) Search(collection string, vector []float64, limit int) (
 		}
 		return nil, err
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
-		if q.local != nil {
-			q.logger.Warn("qdrant search devolvió status, usando vector store local", slog.String("service", "qdrant"), slog.Int("status", resp.StatusCode))
-			return q.local.Search(collection, vector, limit)
-		}
-		return nil, fmt.Errorf("qdrant search failed status %d", resp.StatusCode)
-	}
-	var result map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		if q.local != nil {
-			q.logger.Warn("qdrant search no se pudo decodificar, usando vector store local", slog.String("service", "qdrant"), slog.Any("error", err))
-			return q.local.Search(collection, vector, limit)
-		}
-		return nil, err
-	}
 	return result, nil
+}
+
+func (q *QdrantService) CircuitBreakerState() resilience.Snapshot {
+	if q == nil || q.breaker == nil {
+		return resilience.Snapshot{Name: "qdrant", State: resilience.StateClosed}
+	}
+	return q.breaker.Snapshot()
+}
+
+func (q *QdrantService) withBreaker(ctx context.Context, op func(context.Context) error) error {
+	if q == nil || q.breaker == nil {
+		return op(ctx)
+	}
+	return q.breaker.Execute(ctx, op)
 }

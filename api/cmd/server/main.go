@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"ollama-gateway/internal/config"
+	migrationsservice "ollama-gateway/internal/function/migrations"
 	"ollama-gateway/internal/server"
 	"ollama-gateway/pkg/cache"
 )
@@ -31,6 +32,24 @@ func main() {
 		cacheBackend = redisCache
 	default:
 		cacheBackend = cache.NewMemory()
+	}
+
+	migrationsRunner, err := migrationsservice.NewRunnerWithPool(
+		cfg.MongoURI,
+		cfg.MongoPoolMaxOpen,
+		cfg.MongoPoolMaxIdle,
+		cfg.MongoPoolTimeoutSeconds,
+		logger,
+		time.Duration(cfg.MigrationsLockTTLSeconds)*time.Second,
+	)
+	if err != nil {
+		slog.Error("no se pudo inicializar runner de migraciones", slog.Any("error", err))
+		os.Exit(1)
+	}
+	defer migrationsRunner.Close(context.Background())
+	if err := migrationsRunner.ApplyAll(context.Background()); err != nil {
+		slog.Error("falló ejecución de migraciones al iniciar", slog.Any("error", err))
+		os.Exit(1)
 	}
 
 	srv := server.New(cfg, cacheBackend)

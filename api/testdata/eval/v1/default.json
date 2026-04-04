@@ -1,0 +1,24 @@
+{
+  "suite": "v1/default",
+  "version": "v1",
+  "cases": [
+    {
+      "name": "JWT auth middleware",
+      "prompt": "Explica por qué todas las rutas /api deben estar protegidas con JWT middleware.",
+      "expected_keywords": ["jwt", "middleware", "api"],
+      "forbidden_keywords": ["disable auth", "bypass"]
+    },
+    {
+      "name": "Path traversal mitigation",
+      "prompt": "Resume la mitigación de path traversal al leer o escribir archivos locales.",
+      "expected_keywords": ["filepath.abs", "repo", "traversal"],
+      "forbidden_keywords": ["../../", "sin validar"]
+    },
+    {
+      "name": "Patch guardrails",
+      "prompt": "Describe cómo los guardrails deben bloquear secretos y comandos peligrosos antes del apply.",
+      "expected_keywords": ["guardrails", "secret", "comando"],
+      "forbidden_keywords": ["rm -rf /", "curl | sh"]
+    }
+  ]
+}

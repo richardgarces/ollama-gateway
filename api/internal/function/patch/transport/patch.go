@@ -6,16 +6,18 @@ import (
 	"strconv"
 
 	"ollama-gateway/internal/function/core/domain"
+	guardrailsservice "ollama-gateway/internal/function/guardrails"
 	"ollama-gateway/pkg/httputil"
 )
 
 type PatchHandler struct {
 	repoRoot     string
 	patchService domain.PatchService
+	guardrails   *guardrailsservice.Service
 }
 
-func NewPatchHandler(repoRoot string, patchService domain.PatchService) *PatchHandler {
-	return &PatchHandler{repoRoot: repoRoot, patchService: patchService}
+func NewPatchHandler(repoRoot string, patchService domain.PatchService, guardrails *guardrailsservice.Service) *PatchHandler {
+	return &PatchHandler{repoRoot: repoRoot, patchService: patchService, guardrails: guardrails}
 }
 
 func (h *PatchHandler) Apply(w http.ResponseWriter, r *http.Request) {
@@ -31,6 +33,18 @@ func (h *PatchHandler) Apply(w http.ResponseWriter, r *http.Request) {
 
 	blocks := h.patchService.ExtractCodeBlocks(req.Response)
 	diffs := h.patchService.ExtractDiff(req.Response)
+	if req.Apply && h.guardrails != nil {
+		evaluation := h.guardrails.EvaluateDiffs(diffs)
+		if !evaluation.Allowed {
+			httputil.WriteJSON(w, http.StatusUnprocessableEntity, map[string]interface{}{
+				"error":       "guardrails bloquearon el apply del patch",
+				"applied":     false,
+				"guardrails":  evaluation,
+				"remediation": "Revisa findings y ajusta el patch para eliminar paths sensibles, secretos o comandos peligrosos.",
+			})
+			return
+		}
+	}
 
 	applied := 0
 	if req.Apply {

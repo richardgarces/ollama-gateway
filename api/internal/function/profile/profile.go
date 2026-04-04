@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"ollama-gateway/internal/function/core/domain"
+	"ollama-gateway/internal/function/pooling"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -22,19 +23,22 @@ type ProfileService struct {
 var ErrProfileNotFound = errors.New("profile not found")
 
 func NewProfileService(mongoURI string, logger *slog.Logger) (*ProfileService, error) {
+	return NewProfileServiceWithPool(mongoURI, 0, 0, 5, logger)
+}
+
+func NewProfileServiceWithPool(mongoURI string, maxOpen, maxIdle, timeoutSeconds int, logger *slog.Logger) (*ProfileService, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	if timeoutSeconds <= 0 {
+		timeoutSeconds = 5
+	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSeconds)*time.Second)
 	defer cancel()
 
-	client, err := mongo.Connect(ctx, options.Client().ApplyURI(mongoURI))
+	client, err := pooling.ConnectMongo(mongoURI, maxOpen, maxIdle, timeoutSeconds)
 	if err != nil {
-		return nil, err
-	}
-	if err := client.Ping(ctx, nil); err != nil {
-		_ = client.Disconnect(context.Background())
 		return nil, err
 	}
 

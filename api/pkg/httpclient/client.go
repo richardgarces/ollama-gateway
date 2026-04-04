@@ -9,10 +9,12 @@ import (
 type Options struct {
 	Timeout             time.Duration
 	MaxRetries          int
+	MaxConnsPerHost     int
 	MaxIdleConns        int
 	MaxIdleConnsPerHost int
 	IdleConnTimeout     time.Duration
 	TLSHandshakeTimeout time.Duration
+	DialTimeout         time.Duration
 }
 
 func NewResilientClient(opts Options) *http.Client {
@@ -20,8 +22,9 @@ func NewResilientClient(opts Options) *http.Client {
 
 	transport := &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
-		DialContext:           (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		DialContext:           (&net.Dialer{Timeout: n.DialTimeout, KeepAlive: 30 * time.Second}).DialContext,
 		ForceAttemptHTTP2:     true,
+		MaxConnsPerHost:       n.MaxConnsPerHost,
 		MaxIdleConns:          n.MaxIdleConns,
 		MaxIdleConnsPerHost:   n.MaxIdleConnsPerHost,
 		IdleConnTimeout:       n.IdleConnTimeout,
@@ -45,6 +48,9 @@ func normalizeOptions(opts Options) Options {
 	if opts.MaxIdleConns <= 0 {
 		opts.MaxIdleConns = 100
 	}
+	if opts.MaxConnsPerHost <= 0 {
+		opts.MaxConnsPerHost = 64
+	}
 	if opts.MaxIdleConnsPerHost <= 0 {
 		opts.MaxIdleConnsPerHost = 10
 	}
@@ -53,6 +59,9 @@ func normalizeOptions(opts Options) Options {
 	}
 	if opts.TLSHandshakeTimeout <= 0 {
 		opts.TLSHandshakeTimeout = 10 * time.Second
+	}
+	if opts.DialTimeout <= 0 {
+		opts.DialTimeout = 30 * time.Second
 	}
 	return opts
 }

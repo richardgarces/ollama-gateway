@@ -131,7 +131,7 @@ func TestFullRAGPipeline(t *testing.T) {
 	logger := slog.Default()
 	cacheBackend := cache.NewMemory()
 	ollama := coreservice.NewOllamaService(cfg, logger, cacheBackend)
-	qdrant := coreservice.NewQdrantService(qdrantURL, repoRoot, cfg.VectorStorePath, false, 5, 1, logger)
+	qdrant := coreservice.NewQdrantService(qdrantURL, repoRoot, cfg.VectorStorePath, false, 5, 1, 3, 20, 1, 50, 25, 5, logger)
 	indexer, err := indexerservice.NewIndexerService([]string{repoRoot}, cfg.IndexerStatePath, ollama, qdrant, logger)
 	if err != nil {
 		t.Fatalf("NewIndexerService() error = %v", err)

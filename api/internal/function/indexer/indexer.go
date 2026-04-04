@@ -2,6 +2,7 @@ package service
 
 import (
 	"bufio"
+	"context"
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
@@ -15,8 +16,9 @@ import (
 	"time"
 
 	architectservice "ollama-gateway/internal/function/architect"
-	"ollama-gateway/internal/function/core/domain"
 	coreservice "ollama-gateway/internal/function/core"
+	"ollama-gateway/internal/function/core/domain"
+	eventservice "ollama-gateway/internal/function/events"
 	"ollama-gateway/pkg/reposcope"
 
 	"github.com/fsnotify/fsnotify"
@@ -45,6 +47,7 @@ type IndexerService struct {
 	logger        *slog.Logger
 	onChange      func()
 	onFileIndexed func(path string)
+	events        eventservice.Publisher
 	analyzer      *architectservice.ASTAnalyzer
 	reindexing    bool
 	lastReindexAt time.Time
@@ -102,6 +105,12 @@ func (s *IndexerService) SetOnFileIndexed(fn func(path string)) {
 	s.onFileIndexed = fn
 }
 
+func (s *IndexerService) SetEventPublisher(p eventservice.Publisher) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.events = p
+}
+
 func (s *IndexerService) notifyContentChange() {
 	s.mu.Lock()
 	fn := s.onChange
@@ -114,9 +123,18 @@ func (s *IndexerService) notifyContentChange() {
 func (s *IndexerService) notifyFileIndexed(path string) {
 	s.mu.Lock()
 	fn := s.onFileIndexed
+	pub := s.events
 	s.mu.Unlock()
 	if fn != nil {
 		fn(path)
+	}
+	if pub != nil {
+		repoRoot := reposcope.RepoForPath(path, s.repoRoots)
+		_ = pub.Publish(context.Background(), eventservice.FileIndexed{
+			Path:     path,
+			RepoRoot: repoRoot,
+			At:       time.Now().UTC(),
+		})
 	}
 }
 

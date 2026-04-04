@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"ollama-gateway/internal/function/core/domain"
+	"ollama-gateway/internal/function/pooling"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -31,19 +32,16 @@ type mongoConversation struct {
 }
 
 func NewConversationService(mongoURI string, logger *slog.Logger) (*ConversationService, error) {
+	return NewConversationServiceWithPool(mongoURI, 0, 0, 5, logger)
+}
+
+func NewConversationServiceWithPool(mongoURI string, maxOpen, maxIdle, timeoutSeconds int, logger *slog.Logger) (*ConversationService, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	client, err := mongo.Connect(ctx, options.Client().ApplyURI(mongoURI))
+	client, err := pooling.ConnectMongo(mongoURI, maxOpen, maxIdle, timeoutSeconds)
 	if err != nil {
-		return nil, err
-	}
-	if err := client.Ping(ctx, nil); err != nil {
-		_ = client.Disconnect(context.Background())
 		return nil, err
 	}
 

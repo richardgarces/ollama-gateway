@@ -2,6 +2,7 @@ package service
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,15 +19,25 @@ import (
 )
 
 type RouterService struct {
-	logger          *slog.Logger
-	ollamaService   *OllamaService
-	remoteAPIURL    string
-	remoteAPIKey    string
-	httpClient      *http.Client
-	categorySamples map[string]string
-	categoryModels  map[string]string
-	categoryVectors map[string][]float64
-	loadOnce        sync.Once
+	logger            *slog.Logger
+	ollamaService     *OllamaService
+	feedbackProvider  FeedbackScoreProvider
+	modelHintProvider ModelHintProvider
+	remoteAPIURL      string
+	remoteAPIKey      string
+	httpClient        *http.Client
+	categorySamples   map[string]string
+	categoryModels    map[string]string
+	categoryVectors   map[string][]float64
+	loadOnce          sync.Once
+}
+
+type FeedbackScoreProvider interface {
+	GetModelFeedbackScore(ctx context.Context, model string) (float64, error)
+}
+
+type ModelHintProvider interface {
+	RecommendHintForPrompt(ctx context.Context, prompt, category string) (string, error)
 }
 
 func NewRouterService(cfg *config.Config, ollamaService *OllamaService, logger *slog.Logger) *RouterService {
@@ -68,6 +79,20 @@ func NewRouterService(cfg *config.Config, ollamaService *OllamaService, logger *
 func (s *RouterService) SelectModel(prompt string) string {
 	model, _, _, _ := s.selectModelWithCategory(prompt)
 	return model
+}
+
+func (s *RouterService) SetFeedbackProvider(provider FeedbackScoreProvider) {
+	if s == nil {
+		return
+	}
+	s.feedbackProvider = provider
+}
+
+func (s *RouterService) SetModelHintProvider(provider ModelHintProvider) {
+	if s == nil {
+		return
+	}
+	s.modelHintProvider = provider
 }
 
 func (s *RouterService) GenerateWithFallback(prompt, fullPrompt string) (string, error) {
@@ -177,6 +202,14 @@ func (s *RouterService) selectModelWithCategory(prompt string) (string, string, 
 	bestScore := -1.0
 	for category, vec := range s.categoryVectors {
 		score := cosineSimilarityScore(promptVec, vec)
+		model := s.categoryModels[category]
+		feedbackBoost := 0.0
+		if s.feedbackProvider != nil && model != "" {
+			if fb, err := s.feedbackProvider.GetModelFeedbackScore(context.Background(), model); err == nil {
+				feedbackBoost = 0.2 * clampFeedbackScore(fb)
+			}
+		}
+		score += feedbackBoost
 		if score > bestScore {
 			bestScore = score
 			bestCategory = category
@@ -186,6 +219,14 @@ func (s *RouterService) selectModelWithCategory(prompt string) (string, string, 
 	model := s.categoryModels[bestCategory]
 	if model == "" {
 		model = "gemma:2b"
+	}
+	if s.modelHintProvider != nil {
+		if hinted, err := s.modelHintProvider.RecommendHintForPrompt(context.Background(), prompt, bestCategory); err == nil {
+			hinted = strings.TrimSpace(hinted)
+			if hinted != "" {
+				model = hinted
+			}
+		}
 	}
 
 	s.logger.Info("routing decision",
@@ -324,4 +365,14 @@ func errorString(err error) string {
 		return ""
 	}
 	return err.Error()
+}
+
+func clampFeedbackScore(v float64) float64 {
+	if v < 0 {
+		return 0
+	}
+	if v > 1 {
+		return 1
+	}
+	return v
 }

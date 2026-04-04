@@ -44,6 +44,26 @@ type Config struct {
 	EmbeddingCacheMaxEntries int
 	RAGCacheTTLSeconds       int
 	RAGCacheMaxEntries       int
+	MemoryTTLHours           int
+	MemoryPruneMaxEntries    int
+	CBFailureThreshold       int
+	CBOpenTimeoutSeconds     int
+	CBHalfOpenMaxSuccess     int
+	CBOllamaThreshold        int
+	CBQdrantThreshold        int
+	OutboxWorkerIntervalSec  int
+	OutboxBatchSize          int
+	OutboxMaxAttempts        int
+	OutboxRetryBackoffSec    int
+	MigrationsLockTTLSeconds int
+	PoolMaxOpen              int
+	PoolMaxIdle              int
+	PoolTimeoutSeconds       int
+	MongoPoolMaxOpen         int
+	MongoPoolMaxIdle         int
+	MongoPoolTimeoutSeconds  int
+	EmbeddingPoolSize        int
+	RetrievalPoolSize        int
 }
 
 func Load() *Config {
@@ -83,6 +103,26 @@ func Load() *Config {
 		EmbeddingCacheMaxEntries: getEnvAsInt("EMBEDDING_CACHE_MAX_ENTRIES", 1000),
 		RAGCacheTTLSeconds:       getEnvAsInt("RAG_CACHE_TTL_SECONDS", 1800),
 		RAGCacheMaxEntries:       getEnvAsInt("RAG_CACHE_MAX_ENTRIES", 500),
+		MemoryTTLHours:           getEnvAsInt("MEMORY_TTL_HOURS", 720),
+		MemoryPruneMaxEntries:    getEnvAsInt("MEMORY_PRUNE_MAX_ENTRIES", 1500),
+		CBFailureThreshold:       getEnvAsInt("CB_FAILURE_THRESHOLD", 3),
+		CBOpenTimeoutSeconds:     getEnvAsInt("CB_OPEN_TIMEOUT_SECONDS", 20),
+		CBHalfOpenMaxSuccess:     getEnvAsInt("CB_HALF_OPEN_MAX_SUCCESS", 1),
+		CBOllamaThreshold:        getEnvAsInt("CB_OLLAMA_FAILURE_THRESHOLD", 0),
+		CBQdrantThreshold:        getEnvAsInt("CB_QDRANT_FAILURE_THRESHOLD", 0),
+		OutboxWorkerIntervalSec:  getEnvAsInt("OUTBOX_WORKER_INTERVAL_SEC", 3),
+		OutboxBatchSize:          getEnvAsInt("OUTBOX_BATCH_SIZE", 25),
+		OutboxMaxAttempts:        getEnvAsInt("OUTBOX_MAX_ATTEMPTS", 5),
+		OutboxRetryBackoffSec:    getEnvAsInt("OUTBOX_RETRY_BACKOFF_SEC", 5),
+		MigrationsLockTTLSeconds: getEnvAsInt("MIGRATIONS_LOCK_TTL_SECONDS", 30),
+		PoolMaxOpen:              getEnvAsInt("POOL_MAX_OPEN", 64),
+		PoolMaxIdle:              getEnvAsInt("POOL_MAX_IDLE", 16),
+		PoolTimeoutSeconds:       getEnvAsInt("POOL_TIMEOUT_SECONDS", 30),
+		MongoPoolMaxOpen:         getEnvAsInt("MONGO_POOL_MAX_OPEN", 50),
+		MongoPoolMaxIdle:         getEnvAsInt("MONGO_POOL_MAX_IDLE", 10),
+		MongoPoolTimeoutSeconds:  getEnvAsInt("MONGO_POOL_TIMEOUT_SECONDS", 5),
+		EmbeddingPoolSize:        getEnvAsInt("EMBEDDING_POOL_SIZE", 8),
+		RetrievalPoolSize:        getEnvAsInt("RETRIEVAL_POOL_SIZE", 8),
 	}
 }
 

@@ -1,4 +1,4 @@
-.PHONY: help build test test-integration run clean docker-build docker-up docker-down lint fmt
+.PHONY: help build test test-integration integration-test run clean docker-build docker-up docker-down lint fmt
 
 help: ## Mostrar esta ayuda
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -11,6 +11,10 @@ test: ## Ejecutar tests
 
 test-integration: ## Ejecutar tests de integración
 	cd api && go test -tags=integration -v ./...
+
+integration-test: ## Ejecutar harness de integración aislado con Docker Compose
+	chmod +x test/integration/harness/run.sh test/integration/harness/seed.sh
+	test/integration/harness/run.sh
 
 test-coverage: ## Ejecutar tests con cobertura
 	cd api && go test -v -count=1 -coverprofile=coverage.out ./...

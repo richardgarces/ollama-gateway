@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"ollama-gateway/internal/config"
+	"ollama-gateway/internal/function/resilience"
 	"ollama-gateway/pkg/httputil"
 )
 
@@ -15,6 +16,12 @@ type HealthHandler struct {
 	ollamaURL string
 	qdrantURL string
 	client    *http.Client
+	ollamaCB  breakerStateProvider
+	qdrantCB  breakerStateProvider
+}
+
+type breakerStateProvider interface {
+	CircuitBreakerState() resilience.Snapshot
 }
 
 type dependencyStatus struct {
@@ -30,6 +37,12 @@ type dependenciesStatus struct {
 type readinessResponse struct {
 	Status       string             `json:"status"`
 	Dependencies dependenciesStatus `json:"dependencies"`
+	Breakers     breakersStatus     `json:"breakers"`
+}
+
+type breakersStatus struct {
+	Ollama resilience.Snapshot `json:"ollama"`
+	Qdrant resilience.Snapshot `json:"qdrant"`
 }
 
 func NewHealthHandler(cfg *config.Config) *HealthHandler {
@@ -45,6 +58,14 @@ func NewHealthHandler(cfg *config.Config) *HealthHandler {
 
 func (h *HealthHandler) Liveness(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
+}
+
+func (h *HealthHandler) SetCircuitBreakers(ollama, qdrant breakerStateProvider) {
+	if h == nil {
+		return
+	}
+	h.ollamaCB = ollama
+	h.qdrantCB = qdrant
 }
 
 func (h *HealthHandler) Readiness(w http.ResponseWriter, r *http.Request) {
@@ -82,9 +103,21 @@ func (h *HealthHandler) Readiness(w http.ResponseWriter, r *http.Request) {
 		status = "unhealthy"
 	}
 
+	breakers := breakersStatus{
+		Ollama: resilience.Snapshot{Name: "ollama", State: resilience.StateClosed},
+		Qdrant: resilience.Snapshot{Name: "qdrant", State: resilience.StateClosed},
+	}
+	if h.ollamaCB != nil {
+		breakers.Ollama = h.ollamaCB.CircuitBreakerState()
+	}
+	if h.qdrantCB != nil {
+		breakers.Qdrant = h.qdrantCB.CircuitBreakerState()
+	}
+
 	httputil.WriteJSON(w, http.StatusOK, readinessResponse{
 		Status:       status,
 		Dependencies: deps,
+		Breakers:     breakers,
 	})
 }
 
