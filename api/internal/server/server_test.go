@@ -22,6 +22,7 @@ func TestGetRouteDefinitions(t *testing.T) {
 		"GET /health",
 		"POST /api/generate",
 		"POST /api/commit/message",
+		"POST /api/admin/config/reload",
 		"GET /api-docs",
 	}
 	for _, m := range must {

@@ -28,7 +28,22 @@
     "onCommand:copilot-local.clearSessionState",
     "onCommand:copilot-local.explainTestFailure"
   ],
-  "main": "extension.js",
+  "main": "dist/extension.js",
+  "scripts": {
+    "compile": "tsc -p .",
+    "build": "npm run compile",
+    "size:check": "node scripts/check-size.js"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3",
+	"@types/node": "^22.15.17",
+	"@types/vscode": "^1.60.0"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1",
+    "vscode-languageserver": "^9.0.1",
+    "vscode-languageserver-textdocument": "^1.0.11"
+  },
   "contributes": {
     "commands": [
       {
@@ -221,6 +236,21 @@
           "type": "string",
           "default": "local-rag",
           "description": "Default model to request"
+        },
+        "copilotLocal.chatModel": {
+          "type": "string",
+          "default": "",
+          "description": "Dedicated model for chat requests. Empty uses copilotLocal.model"
+        },
+        "copilotLocal.fimModel": {
+          "type": "string",
+          "default": "",
+          "description": "Dedicated model for inline completions/FIM. Empty uses copilotLocal.model"
+        },
+        "copilotLocal.embeddingModel": {
+          "type": "string",
+          "default": "nomic-embed-text",
+          "description": "Preferred embedding model name used by the gateway"
         },
         "copilotLocal.workspaceModel": {
           "type": "string",

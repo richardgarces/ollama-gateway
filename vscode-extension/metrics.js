@@ -9,7 +9,10 @@ class LocalMetrics {
       avg_response_time_ms: 0,
       avg_time_to_first_token_ms: 0,
       errors_count: 0,
+      started_at_ms: Date.now(),
+      last_request_at_ms: 0,
     });
+    if (!this.data.started_at_ms) this.data.started_at_ms = Date.now();
   }
 
   _todayKey() {
@@ -36,12 +39,20 @@ class LocalMetrics {
     if (hadError) {
       this.data.errors_count += 1;
     }
+    this.data.last_request_at_ms = Date.now();
 
     await this._persist();
   }
 
   getSnapshot() {
     return { ...this.data, requests_per_day: { ...this.data.requests_per_day } };
+  }
+
+  tokensPerSecondApprox() {
+    const snap = this.getSnapshot();
+    const started = Number(snap.started_at_ms || Date.now());
+    const elapsedSec = Math.max(1, (Date.now() - started) / 1000);
+    return Number(snap.total_tokens_approx || 0) / elapsedSec;
   }
 
   graphLastDays(days = 7) {

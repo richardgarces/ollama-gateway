@@ -9,6 +9,19 @@ Este documento resume las variables soportadas actualmente por [api/internal/con
 - `OLLAMA_URL` (default: `http://ollama:11434`): endpoint de Ollama.
 - `QDRANT_URL` (default: `http://qdrant:6333`): endpoint de Qdrant.
 - `MONGO_URI` (default: `mongodb://localhost:27017`): conexión Mongo.
+- `CONFIG_FILE` (default: vacío): ruta a archivo JSON con variables tipo env para cargar configuración adicional.
+
+Ejemplo de `CONFIG_FILE`:
+
+```json
+{
+	"PORT": "8081",
+	"HTTP_TIMEOUT_SECONDS": 30,
+	"RATE_LIMIT_ENDPOINTS": {
+		"POST /api/v2/generate": 40
+	}
+}
+```
 
 ## Repositorio y rutas
 

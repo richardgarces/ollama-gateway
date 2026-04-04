@@ -50,6 +50,7 @@ func (h *OpenAIHandler) Embeddings(w http.ResponseWriter, r *http.Request) {
 }
 
 type completionReq struct {
+	Model  string `json:"model,omitempty"`
 	Prompt string `json:"prompt"`
 	Stream bool   `json:"stream"`
 }
@@ -77,7 +78,7 @@ func (h *OpenAIHandler) Completions(w http.ResponseWriter, r *http.Request) {
 			httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		if err := h.rag.StreamGenerateWithContext(prompt, func(chunk string) error {
+		streamFn := func(chunk string) error {
 			return httputil.WriteSSEData(w, map[string]interface{}{
 				"id":     "cmpl-local-1",
 				"object": "text_completion",
@@ -85,14 +86,25 @@ func (h *OpenAIHandler) Completions(w http.ResponseWriter, r *http.Request) {
 					"text": chunk,
 				}},
 			})
-		}); err != nil {
+		}
+		if strings.TrimSpace(req.Model) != "" {
+			if err := h.ollama.StreamGenerate(req.Model, prompt, streamFn); err != nil {
+				return
+			}
+		} else if err := h.rag.StreamGenerateWithContext(prompt, streamFn); err != nil {
 			return
 		}
 		_ = httputil.WriteSSEDone(w)
 		return
 	}
 	prompt := withRequestIDPrompt(r, req.Prompt)
-	out, err := h.rag.GenerateWithContext(prompt)
+	var out string
+	var err error
+	if strings.TrimSpace(req.Model) != "" {
+		out, err = h.ollama.Generate(req.Model, prompt)
+	} else {
+		out, err = h.rag.GenerateWithContext(prompt)
+	}
 	if err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 		return

@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -17,6 +18,11 @@ import (
 type Config struct {
 	Port                   string
 	OllamaURL              string
+	ChatModel              string
+	FIMModel               string
+	EmbeddingModel         string
+	OllamaKeepAlive        string
+	AutoQuantizeModels     bool
 	QdrantURL              string
 	JWTSecret              []byte
 	LogLevel               string
@@ -67,6 +73,22 @@ type Config struct {
 }
 
 func Load() *Config {
+	cfg, err := LoadWithError()
+	if err != nil {
+		log.Printf("WARN: no se pudo cargar archivo de configuración, usando solo env vars: %v", err)
+		return loadFromEnv()
+	}
+	return cfg
+}
+
+func LoadWithError() (*Config, error) {
+	if _, _, err := applyConfigFileToEnv(); err != nil {
+		return nil, err
+	}
+	return loadFromEnv(), nil
+}
+
+func loadFromEnv() *Config {
 	repoRoots := parseRepoRoots()
 	repoRoots = reposcope.CanonicalizeRoots(repoRoots)
 	repoRoot := "."
@@ -78,6 +100,11 @@ func Load() *Config {
 	return &Config{
 		Port:                     getEnv("PORT", "8081"),
 		OllamaURL:                getEnv("OLLAMA_URL", "http://ollama:11434"),
+		ChatModel:                getEnv("CHAT_MODEL", "local-rag"),
+		FIMModel:                 getEnv("FIM_MODEL", "local-rag"),
+		EmbeddingModel:           getEnv("EMBEDDING_MODEL", "nomic-embed-text"),
+		OllamaKeepAlive:          getEnv("OLLAMA_KEEP_ALIVE", "-1"),
+		AutoQuantizeModels:       getEnvAsBool("AUTO_QUANTIZE_MODELS", true),
 		QdrantURL:                getEnv("QDRANT_URL", "http://qdrant:6333"),
 		JWTSecret:                loadJWTSecret(),
 		LogLevel:                 getEnv("LOG_LEVEL", "info"),
@@ -124,6 +151,98 @@ func Load() *Config {
 		EmbeddingPoolSize:        getEnvAsInt("EMBEDDING_POOL_SIZE", 8),
 		RetrievalPoolSize:        getEnvAsInt("RETRIEVAL_POOL_SIZE", 8),
 	}
+}
+
+func applyConfigFileToEnv() (string, int, error) {
+	path, ok := resolveConfigFilePath()
+	if !ok {
+		return "", 0, nil
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", 0, fmt.Errorf("no se pudo resolver CONFIG_FILE: %w", err)
+	}
+	raw, err := os.ReadFile(abs)
+	if err != nil {
+		return "", 0, fmt.Errorf("no se pudo leer CONFIG_FILE=%s: %w", abs, err)
+	}
+	vars, err := parseConfigFileVars(raw)
+	if err != nil {
+		return "", 0, fmt.Errorf("CONFIG_FILE inválido (%s): %w", abs, err)
+	}
+	applied := 0
+	for k, v := range vars {
+		if err := os.Setenv(k, v); err != nil {
+			return "", 0, fmt.Errorf("no se pudo exportar %s desde CONFIG_FILE: %w", k, err)
+		}
+		applied++
+	}
+	return abs, applied, nil
+}
+
+func resolveConfigFilePath() (string, bool) {
+	v := strings.TrimSpace(os.Getenv("CONFIG_FILE"))
+	if v == "" {
+		return "", false
+	}
+	return v, true
+}
+
+func parseConfigFileVars(raw []byte) (map[string]string, error) {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" {
+		return nil, errors.New("archivo vacío")
+	}
+	parsed := make(map[string]json.RawMessage)
+	if err := json.Unmarshal([]byte(trimmed), &parsed); err != nil {
+		return nil, err
+	}
+	if len(parsed) == 0 {
+		return nil, errors.New("no contiene variables")
+	}
+	out := make(map[string]string, len(parsed))
+	for key, value := range parsed {
+		k := strings.TrimSpace(key)
+		if k == "" {
+			continue
+		}
+		s, err := rawJSONToEnvValue(value)
+		if err != nil {
+			return nil, fmt.Errorf("campo %q inválido: %w", k, err)
+		}
+		out[k] = s
+	}
+	return out, nil
+}
+
+func rawJSONToEnvValue(raw json.RawMessage) (string, error) {
+	if len(raw) == 0 {
+		return "", errors.New("valor vacío")
+	}
+	var asString string
+	if err := json.Unmarshal(raw, &asString); err == nil {
+		return asString, nil
+	}
+	var asBool bool
+	if err := json.Unmarshal(raw, &asBool); err == nil {
+		if asBool {
+			return "true", nil
+		}
+		return "false", nil
+	}
+	var asNumber json.Number
+	if err := json.Unmarshal(raw, &asNumber); err == nil {
+		return asNumber.String(), nil
+	}
+	var asAny interface{}
+	if err := json.Unmarshal(raw, &asAny); err != nil {
+		return "", err
+	}
+	encoded, err := json.Marshal(asAny)
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
 }
 
 func parseRepoRoots() []string {

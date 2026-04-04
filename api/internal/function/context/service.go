@@ -1,11 +1,13 @@
 package service
 
 import (
+	"bufio"
 	"errors"
 	"go/parser"
 	"go/token"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -257,9 +259,18 @@ func (s *Service) buildGraph() (graphSnapshot, error) {
 			}
 
 			fset := token.NewFileSet()
-			parsed, err := parser.ParseFile(fset, path, nil, parser.ImportsOnly)
-			if err != nil {
-				return nil
+			imports := parseImportsWithTreeSitter(path)
+			if len(imports) == 0 {
+				parsed, err := parser.ParseFile(fset, path, nil, parser.ImportsOnly)
+				if err != nil {
+					return nil
+				}
+				for _, imp := range parsed.Imports {
+					v := strings.Trim(imp.Path.Value, "\"")
+					if v != "" {
+						imports = append(imports, v)
+					}
+				}
 			}
 
 			relPath, err := filepath.Rel(absRoot, path)
@@ -270,14 +281,6 @@ func (s *Service) buildGraph() (graphSnapshot, error) {
 			relDir := filepath.ToSlash(filepath.Dir(relPath))
 			if relDir == "." {
 				relDir = ""
-			}
-
-			imports := make([]string, 0, len(parsed.Imports))
-			for _, imp := range parsed.Imports {
-				v := strings.Trim(imp.Path.Value, "\"")
-				if v != "" {
-					imports = append(imports, v)
-				}
 			}
 
 			files[path] = parsedFile{imports: imports, repoRoot: absRoot, repoPath: relPath}
@@ -469,4 +472,43 @@ func readModulePath(root string) string {
 		}
 	}
 	return ""
+}
+
+// parseImportsWithTreeSitter uses the `tree-sitter` CLI when available.
+// Expected command output includes import path literals; fallback is handled by caller.
+func parseImportsWithTreeSitter(filePath string) []string {
+	out, err := exec.Command("tree-sitter", "parse", filePath).Output()
+	if err != nil || len(out) == 0 {
+		return nil
+	}
+	scanner := bufio.NewScanner(strings.NewReader(string(out)))
+	imports := make([]string, 0, 8)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.Contains(line, "import") && !strings.Contains(line, "interpreted_string_literal") {
+			continue
+		}
+		for _, lit := range extractQuotedLiterals(line) {
+			if lit != "" {
+				imports = append(imports, lit)
+			}
+		}
+	}
+	return dedupe(imports)
+}
+
+var quotedLiteralRegexp = regexp.MustCompile(`"([^"]+)"`)
+
+func extractQuotedLiterals(line string) []string {
+	matches := quotedLiteralRegexp.FindAllStringSubmatch(line, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(matches))
+	for _, m := range matches {
+		if len(m) > 1 {
+			out = append(out, strings.TrimSpace(m[1]))
+		}
+	}
+	return out
 }

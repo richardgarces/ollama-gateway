@@ -9,7 +9,9 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"ollama-gateway/internal/config"
@@ -17,6 +19,8 @@ import (
 	"ollama-gateway/internal/function/resilience"
 	"ollama-gateway/pkg/cache"
 	"ollama-gateway/pkg/httpclient"
+
+	"github.com/shirou/gopsutil/v4/mem"
 )
 
 type OllamaService struct {
@@ -27,8 +31,16 @@ type OllamaService struct {
 	maxCacheSize int
 	logger       *slog.Logger
 	offline      bool
+	chatModel    string
+	fimModel     string
+	embedModel   string
+	keepAlive    string
+	autoQuantize bool
 	breaker      *resilience.CircuitBreaker
 	embeddingSem chan struct{}
+	modelsMu     sync.Mutex
+	modelsCache  []string
+	modelsAt     time.Time
 	poolObserver interface {
 		RegisterPool(name string, capacity int)
 		ObservePoolAcquire(name string, waited bool)
@@ -62,6 +74,11 @@ func NewOllamaService(cfg *config.Config, logger *slog.Logger, embeddingCache ca
 		cacheTTL:     ttl,
 		maxCacheSize: max,
 		logger:       logger,
+		chatModel:    strings.TrimSpace(cfg.ChatModel),
+		fimModel:     strings.TrimSpace(cfg.FIMModel),
+		embedModel:   strings.TrimSpace(cfg.EmbeddingModel),
+		keepAlive:    strings.TrimSpace(cfg.OllamaKeepAlive),
+		autoQuantize: cfg.AutoQuantizeModels,
 		breaker: resilience.NewCircuitBreaker(resilience.Config{
 			Name:               "ollama",
 			FailureThreshold:   circuitThreshold(cfg.CBOllamaThreshold, cfg.CBFailureThreshold),
@@ -167,13 +184,19 @@ func (s *OllamaService) ensureAvailable() error {
 }
 
 func (s *OllamaService) Generate(model, prompt string) (string, error) {
+	return s.GenerateWithContext(context.Background(), model, prompt)
+}
+
+func (s *OllamaService) GenerateWithContext(ctx context.Context, model, prompt string) (string, error) {
 	if err := s.ensureAvailable(); err != nil {
 		return "", err
 	}
+	model = s.effectiveModel(model, false)
 	reqBody := domain.OllamaRequest{
-		Model:  model,
-		Prompt: prompt,
-		Stream: false,
+		Model:     model,
+		Prompt:    prompt,
+		Stream:    false,
+		KeepAlive: s.keepAlive,
 	}
 
 	data, err := json.Marshal(reqBody)
@@ -182,8 +205,13 @@ func (s *OllamaService) Generate(model, prompt string) (string, error) {
 	}
 
 	var result domain.OllamaResponse
-	err = s.withBreaker(context.Background(), func(ctx context.Context) error {
-		resp, postErr := s.client.Post(s.baseURL+"/api/generate", "application/json", bytes.NewBuffer(data))
+	err = s.withBreaker(ctx, func(ctx context.Context) error {
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, s.baseURL+"/api/generate", bytes.NewBuffer(data))
+		if reqErr != nil {
+			return reqErr
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, postErr := s.client.Do(req)
 		if postErr != nil {
 			return fmt.Errorf("Ollama is not available. Check that the service is running.")
 		}
@@ -209,10 +237,12 @@ func (s *OllamaService) StreamGenerate(model, prompt string, onChunk func(string
 	if err := s.ensureAvailable(); err != nil {
 		return err
 	}
+	model = s.effectiveModel(model, true)
 	reqBody := domain.OllamaRequest{
-		Model:  model,
-		Prompt: prompt,
-		Stream: true,
+		Model:     model,
+		Prompt:    prompt,
+		Stream:    true,
+		KeepAlive: s.keepAlive,
 	}
 
 	data, err := json.Marshal(reqBody)
@@ -258,6 +288,7 @@ func (s *OllamaService) StreamGenerate(model, prompt string, onChunk func(string
 // (no local buffer helpers; using bytes.NewBuffer and standard io)
 
 func (s *OllamaService) GetEmbedding(model, text string) ([]float64, error) {
+	model = s.effectiveEmbeddingModel(model)
 	cacheKey := model + ":" + text
 	if raw, err := s.cache.Get(cacheKey); err == nil {
 		var embedding []float64
@@ -278,8 +309,9 @@ func (s *OllamaService) GetEmbedding(model, text string) ([]float64, error) {
 	}
 
 	reqBody := map[string]interface{}{
-		"model":  model,
-		"prompt": text,
+		"model":      model,
+		"prompt":     text,
+		"keep_alive": s.keepAlive,
 	}
 
 	data, err := json.Marshal(reqBody)
@@ -374,4 +406,76 @@ func (s *OllamaService) releaseEmbeddingSlot() {
 	case <-s.embeddingSem:
 	default:
 	}
+}
+
+var quantSuffixRegex = regexp.MustCompile(`(?i)-q(4|8)[^:]*`)
+
+func (s *OllamaService) effectiveEmbeddingModel(requested string) string {
+	requested = strings.TrimSpace(requested)
+	if requested == "" {
+		requested = s.embedModel
+	}
+	if requested == "" {
+		requested = "nomic-embed-text"
+	}
+	return s.effectiveModel(requested, false)
+}
+
+func (s *OllamaService) effectiveModel(requested string, forFIM bool) string {
+	model := strings.TrimSpace(requested)
+	if model == "" {
+		if forFIM && s.fimModel != "" {
+			model = s.fimModel
+		} else if s.chatModel != "" {
+			model = s.chatModel
+		}
+	}
+	if model == "" {
+		model = "gemma:2b"
+	}
+	if !s.autoQuantize {
+		return model
+	}
+	if quantSuffixRegex.MatchString(model) {
+		return model
+	}
+	return s.quantizedModelCandidate(model)
+}
+
+func (s *OllamaService) quantizedModelCandidate(base string) string {
+	models := s.cachedModels()
+	if len(models) == 0 {
+		return base
+	}
+	preferQ8 := false
+	if vm, err := mem.VirtualMemory(); err == nil {
+		preferQ8 = vm.Total >= 24*1024*1024*1024
+	}
+	needle := "q4"
+	if preferQ8 {
+		needle = "q8"
+	}
+	lowerBase := strings.ToLower(strings.TrimSpace(base))
+	for _, m := range models {
+		lm := strings.ToLower(m)
+		if strings.Contains(lm, lowerBase) && strings.Contains(lm, needle) {
+			return m
+		}
+	}
+	return base
+}
+
+func (s *OllamaService) cachedModels() []string {
+	s.modelsMu.Lock()
+	defer s.modelsMu.Unlock()
+	if len(s.modelsCache) > 0 && time.Since(s.modelsAt) < 2*time.Minute {
+		return append([]string(nil), s.modelsCache...)
+	}
+	models, err := s.ListModels()
+	if err != nil || len(models) == 0 {
+		return append([]string(nil), s.modelsCache...)
+	}
+	s.modelsCache = append([]string(nil), models...)
+	s.modelsAt = time.Now()
+	return append([]string(nil), s.modelsCache...)
 }

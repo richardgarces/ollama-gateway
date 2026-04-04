@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/hex"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -58,5 +59,49 @@ func TestLoadJWTSecretPaths(t *testing.T) {
 	randSecret := loadJWTSecret()
 	if len(randSecret) != 32 {
 		t.Fatalf("expected random 32-byte jwt secret")
+	}
+}
+
+func TestLoadWithConfigFile(t *testing.T) {
+	t.Setenv("JWT_SECRET", strings.Repeat("a", 64))
+	t.Setenv("CONFIG_FILE", filepath.Join(t.TempDir(), "config.json"))
+
+	configJSON := `{
+		"PORT": "9191",
+		"RATE_LIMIT_RPM": 150,
+		"RATE_LIMIT_ENDPOINTS": {"GET /health": 500},
+		"HTTP_TIMEOUT_SECONDS": 42
+	}`
+	if err := os.WriteFile(os.Getenv("CONFIG_FILE"), []byte(configJSON), 0644); err != nil {
+		t.Fatalf("write config file: %v", err)
+	}
+
+	cfg, err := LoadWithError()
+	if err != nil {
+		t.Fatalf("expected load with config file, got error: %v", err)
+	}
+	if cfg.Port != "9191" {
+		t.Fatalf("expected port from config file, got %s", cfg.Port)
+	}
+	if cfg.RateLimitRPM != 150 {
+		t.Fatalf("expected rate limit from config file, got %d", cfg.RateLimitRPM)
+	}
+	if cfg.HTTPTimeoutSeconds != 42 {
+		t.Fatalf("expected timeout from config file, got %d", cfg.HTTPTimeoutSeconds)
+	}
+	if cfg.RateLimitEndpoints["GET /health"] != 500 {
+		t.Fatalf("expected endpoint limit from config file")
+	}
+}
+
+func TestLoadWithConfigFileInvalid(t *testing.T) {
+	t.Setenv("JWT_SECRET", strings.Repeat("a", 64))
+	t.Setenv("CONFIG_FILE", filepath.Join(t.TempDir(), "invalid.json"))
+	if err := os.WriteFile(os.Getenv("CONFIG_FILE"), []byte("{bad json"), 0644); err != nil {
+		t.Fatalf("write invalid config file: %v", err)
+	}
+
+	if _, err := LoadWithError(); err == nil {
+		t.Fatalf("expected error for invalid config file")
 	}
 }

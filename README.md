@@ -9,6 +9,23 @@ Ollama SaaS Gateway es un servidor en Go diseñado para convertir una instalaci�
 - Permite indexar repositorios locales y usar recuperación por vectores (Qdrant) para respuestas con contexto (RAG).
 - Ofrece integración con editores (scaffold de extensión VS Code y `copilot-cli`) para flujo de trabajo local y privacidad.
 
+## Caracteristicas de la app (una a una)
+
+1. Compatibilidad OpenAI API: expone rutas `/openai/v1/...` para `chat/completions`, `completions` y `embeddings`, facilitando integraciones existentes sin cambios grandes.
+2. Gateway privado sobre Ollama: centraliza acceso a modelos locales o remotos de Ollama con una capa de API uniforme para equipos.
+3. RAG con base vectorial: indexa repositorios y consulta contexto relevante usando Qdrant para mejorar precision en respuestas tecnicas.
+4. Indexador de repositorios: permite reindexar bajo demanda y consultar estado del indexador desde endpoints internos.
+5. Streaming de respuestas: soporta salida incremental (SSE) para chat, mejorando experiencia interactiva en cliente.
+6. Fallbacks de transporte en cliente VS Code: el chat intenta WebSocket, luego HTTP y finalmente CLI para mantener continuidad ante fallos.
+7. Versionado de API: ofrece contratos bajo `/api/v1` y `/api/v2` con plan de migracion para clientes.
+8. Compatibilidad backward en rutas legacy: mantiene endpoints `/api/...` con headers de deprecacion y fecha de sunset.
+9. Traduccion de campos legacy en v2: acepta aliases antiguos y los mapea al contrato actual, informando en headers de traduccion.
+10. Seguridad por JWT en API protegida: las rutas de negocio bajo `/api/...` requieren autenticacion.
+11. Observabilidad operativa: incluye metricas JSON, endpoint Prometheus y estado visible para monitoreo local.
+12. Extension VS Code integrada: incorpora chat local, perfiles por workspace, historial buscable, favoritos, comparador de modelos y explicador de fallos de tests.
+13. Herramientas de productividad para codigo: incluye comandos para explicar/refactorizar/fijar errores, traducir codigo, generar tests y sugerir commit messages.
+14. Soporte de sesiones de chat: permite unirse a sesiones compartidas y restaurar estado de sesion en el workspace.
+
 ## **Sección Técnica**
 
 - Lenguaje: Go (módulos Go). Arquitectura limpia (cmd/, internal/, pkg/).
@@ -43,15 +60,9 @@ Ollama SaaS Gateway es un servidor en Go diseñado para convertir una instalaci�
 ## **Mejoras Deseables / Futuro**
 
 - Plugins/Tools para agentes (cargar tools desde YAML y registrar dinámicamente).
-- Historial de conversaciones persistente por usuario (MongoDB) para contexto multi-turno.
-- Routing inteligente multi-modelo (select-model por embedding/semántica).
 - WebSocket bidireccional para sesiones interactivas con cancelación y control.
-- Caché de respuestas RAG (LRU+TTL) y backend distribuido (Redis) para escalado.
 - Modo offline robusto y manejo de modelos locales en Ollama.
-- Aplicar parches/diffs automáticamente con confirmación y control de seguridad.
 - Integración VS Code enriquecida: ghost text, inline completions y snippets aplicables.
-- Tests de integración automáticos con testcontainers (Qdrant, MongoDB).
-- Dashboard web embebido para operaciones y trazabilidad.
 
 ## Desarrollo rápido
 

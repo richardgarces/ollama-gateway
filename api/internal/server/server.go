@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"path/filepath"
 	"time"
 
 	"ollama-gateway/internal/config"
@@ -19,6 +20,8 @@ import (
 	cicdtransport "ollama-gateway/internal/function/cicd/transport"
 	commitgenservice "ollama-gateway/internal/function/commitgen"
 	commitgentransport "ollama-gateway/internal/function/commitgen/transport"
+	completeservice "ollama-gateway/internal/function/complete"
+	completetransport "ollama-gateway/internal/function/complete/transport"
 	contextservice "ollama-gateway/internal/function/context"
 	contexttransport "ollama-gateway/internal/function/context/transport"
 	coreservice "ollama-gateway/internal/function/core"
@@ -60,6 +63,8 @@ import (
 	repotransport "ollama-gateway/internal/function/repo/transport"
 	reviewservice "ollama-gateway/internal/function/review"
 	reviewtransport "ollama-gateway/internal/function/review/transport"
+	runtimeconfigservice "ollama-gateway/internal/function/runtime_config"
+	runtimeconfigtransport "ollama-gateway/internal/function/runtime_config/transport"
 	sandboxservice "ollama-gateway/internal/function/sandbox"
 	sandboxtransport "ollama-gateway/internal/function/sandbox/transport"
 	searchtransport "ollama-gateway/internal/function/search/transport"
@@ -80,6 +85,7 @@ import (
 	"ollama-gateway/internal/utils/observability"
 	"ollama-gateway/pkg/cache"
 
+	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
@@ -126,6 +132,7 @@ func GetRouteDefinitions() []RouteDefinition {
 		{Method: "POST", Path: "/api/v2/search", Description: "Busqueda semantica (v2, acepta aliases top_k/k)", ExampleBody: "{\n  \"query\": \"auth middleware\",\n  \"top\": 5\n}", Protected: false},
 		{Method: "POST", Path: "/openai/v1/embeddings", Description: "OpenAI compatible embeddings", ExampleBody: "{\n  \"model\": \"nomic-embed-text\",\n  \"input\": \"hola\"\n}", Protected: false},
 		{Method: "POST", Path: "/openai/v1/completions", Description: "OpenAI compatible completions", ExampleBody: "{\n  \"model\": \"llama3\",\n  \"prompt\": \"Hello\"\n}", Protected: false},
+		{Method: "POST", Path: "/complete", Description: "Code completion FIM with cursor context (<PRE><SUF><MID>)", ExampleBody: "{\n  \"model\": \"qwen2.5-coder\",\n  \"prefix\": \"func main() {\\n\",\n  \"suffix\": \"\\n}\",\n  \"language\": \"go\"\n}", Protected: false},
 		{Method: "POST", Path: "/openai/v1/chat/completions", Description: "OpenAI compatible chat completions", ExampleBody: "{\n  \"model\": \"llama3\",\n  \"messages\": [{\"role\":\"user\",\"content\":\"hola\"}]\n}", Protected: false},
 		{Method: "GET", Path: "/ws/chat", Description: "WebSocket chat", ExampleBody: "", Protected: false},
 		{Method: "POST", Path: "/api/generate", Description: "(Legacy) Generacion simple; responde con headers de deprecación", ExampleBody: "{\n  \"prompt\": \"Resume este texto\",\n  \"stream\": false\n}", Protected: true},
@@ -169,6 +176,7 @@ func GetRouteDefinitions() []RouteDefinition {
 		{Method: "POST", Path: "/api/feedback", Description: "Guardar feedback de calidad de respuesta", ExampleBody: "{\n  \"rating\": 4,\n  \"comment\": \"buena respuesta\",\n  \"request_id\": \"req-123\",\n  \"model\": \"qwen2.5:7b\",\n  \"metadata\": {\"task\": \"review\"}\n}", Protected: true},
 		{Method: "GET", Path: "/api/feedback/summary", Description: "Resumen agregado de feedback por modelo", ExampleBody: "", Protected: true},
 		{Method: "POST", Path: "/api/admin/outbox/retry", Description: "Reintento manual de eventos en dead-letter de outbox", ExampleBody: "{\n  \"id\": \"6611b7e8c6d3ef2c71f0a9b3\"\n}", Protected: true},
+		{Method: "POST", Path: "/api/admin/config/reload", Description: "Recargar configuración en runtime sin reiniciar proceso", ExampleBody: "{}", Protected: true},
 		{Method: "POST", Path: "/api/eval/run", Description: "Ejecutar benchmark de prompts por suite versionada", ExampleBody: "{\n  \"suite\": \"v1/default\"\n}", Protected: true},
 		{Method: "GET", Path: "/api/eval/results/{id}", Description: "Obtener resultado de benchmark y exportes JSON/Markdown", ExampleBody: "", Protected: true},
 		{Method: "POST", Path: "/api/v1/chat/completions", Description: "Chat completions interno", ExampleBody: "{\n  \"model\": \"llama3\",\n  \"messages\": [{\"role\":\"user\",\"content\":\"hola\"}]\n}", Protected: true},
@@ -223,7 +231,14 @@ func (s *Server) setupRoutes() {
 		logger,
 	)
 	if err != nil {
-		logger.Warn("conversation service no disponible; se continuará sin persistencia", slog.String("error", err.Error()))
+		sqlitePath := filepath.Join(s.cfg.RepoRoot, ".chat_history.sqlite")
+		conversationService, err = coreservice.NewConversationServiceSQLite(sqlitePath, logger)
+		if err != nil {
+			logger.Warn("conversation service no disponible; se continuará sin persistencia", slog.String("error", err.Error()))
+		} else {
+			logger.Warn("mongo no disponible; se usará sqlite para persistencia de conversación", slog.String("path", sqlitePath))
+			s.conversationService = conversationService
+		}
 	} else {
 		s.conversationService = conversationService
 	}
@@ -439,6 +454,7 @@ func (s *Server) setupRoutes() {
 	memoryHandler := memorytransport.NewHandler(memoryService)
 	feedbackHandler := feedbacktransport.NewHandler(feedbackService)
 	outboxHandler := outboxtransport.NewHandler(outboxSvc)
+	runtimeConfigHandler := runtimeconfigtransport.NewHandler(runtimeconfigservice.NewService(s.cfg))
 	modelRecommenderHandler := modelrecommendertransport.NewHandler(modelRecommenderService)
 	evalHandler := evaltransport.NewHandler(evalService)
 	modelsHandler := modelstransport.NewHandler(ollamaService)
@@ -446,6 +462,8 @@ func (s *Server) setupRoutes() {
 	dashboardHandler := dashboardtransport.NewHandler(s.cfg, metricsCollector, indexerService, logStream)
 	searchHandler := searchtransport.NewHandler(ollamaClient, vectorStore, repoRoots)
 	openaiHandler := openaitransport.NewHandler(ollamaClient, ragEngine, s.conversationService, s.profileService)
+	completeService := completeservice.NewService(ollamaService, s.cfg.FIMModel)
+	completeHandler := completetransport.NewHandler(completeService)
 	wsHandler := wstransport.NewHandler(ragEngine, s.cfg.JWTSecret)
 	apiExplorerHandler := apiexplorertransport.NewHandler(GetRouteDefinitions())
 	healthHandler := healthtransport.NewHandler(s.cfg)
@@ -505,6 +523,7 @@ func (s *Server) setupRoutes() {
 	// OpenAI-compatible endpoints
 	mux.HandleFunc("POST /openai/v1/embeddings", openaiHandler.Embeddings)
 	mux.HandleFunc("POST /openai/v1/completions", openaiHandler.Completions)
+	mux.HandleFunc("POST /complete", completeHandler.Complete)
 	mux.HandleFunc("POST /openai/v1/chat/completions", openaiHandler.ChatCompletions)
 	mux.HandleFunc("GET /ws/chat", wsHandler.Handle)
 
@@ -550,6 +569,7 @@ func (s *Server) setupRoutes() {
 	mux.Handle("POST /api/feedback", authMiddleware.JWT(http.HandlerFunc(feedbackHandler.Save)))
 	mux.Handle("GET /api/feedback/summary", authMiddleware.JWT(http.HandlerFunc(feedbackHandler.Summary)))
 	mux.Handle("POST /api/admin/outbox/retry", authMiddleware.JWT(http.HandlerFunc(outboxHandler.Retry)))
+	mux.Handle("POST /api/admin/config/reload", authMiddleware.JWT(http.HandlerFunc(runtimeConfigHandler.Reload)))
 	mux.Handle("POST /api/eval/run", authMiddleware.JWT(http.HandlerFunc(evalHandler.Run)))
 	mux.Handle("GET /api/eval/results/{id}", authMiddleware.JWT(http.HandlerFunc(evalHandler.GetResult)))
 	mux.Handle("POST /api/models/recommend", authMiddleware.JWT(legacy(http.HandlerFunc(modelRecommenderHandler.Recommend), "/api/v2/models/recommend")))
@@ -581,9 +601,13 @@ func (s *Server) setupRoutes() {
 }
 
 func (s *Server) Start() error {
+	gin.SetMode(gin.ReleaseMode)
+	g := gin.New()
+	g.Any("/*any", gin.WrapH(s.router))
+
 	s.httpServer = &http.Server{
 		Addr:         ":" + s.cfg.Port,
-		Handler:      s.router,
+		Handler:      g,
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 120 * time.Second,
 		IdleTimeout:  60 * time.Second,

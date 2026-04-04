@@ -3,6 +3,7 @@ const http = require('http');
 const https = require('https');
 const { spawn } = require('child_process');
 const path = require('path');
+const fs = require('fs');
 const { LocalMetrics } = require('./metrics');
 
 const DEFAULT_WORKSPACE_PROFILES = {
@@ -64,6 +65,9 @@ function getConfig() {
   const workspaceTemp = Number.isFinite(Number(workspaceTempRaw)) ? Number(workspaceTempRaw) : null;
 
   const resolvedModel = workspaceModel || activeProfile.model || baseModel;
+  const chatModel = String(cfg.get('chatModel') || '').trim() || resolvedModel;
+  const fimModel = String(cfg.get('fimModel') || '').trim() || resolvedModel;
+  const embeddingModel = String(cfg.get('embeddingModel') || '').trim() || 'nomic-embed-text';
   const resolvedLang = workspaceLang || activeProfile.lang || 'es';
   const resolvedTemperature = workspaceTemp === null
     ? activeProfile.temperature
@@ -72,6 +76,9 @@ function getConfig() {
   return {
     apiUrl: (cfg.get('apiUrl') || 'http://localhost:8081').replace(/\/+$/, ''),
     model: resolvedModel,
+    chatModel,
+    fimModel,
+    embeddingModel,
     cliPath: cfg.get('cliPath') || '',
     jwtToken: cfg.get('jwtToken') || '',
     inlineCompletions: cfg.get('inlineCompletions', true),
@@ -90,6 +97,34 @@ function getConfig() {
     lang: resolvedLang,
     temperature: resolvedTemperature,
   };
+}
+
+let promptRCText = '';
+
+function loadPromptRC() {
+  const folder = vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath;
+  if (!folder) {
+    promptRCText = '';
+    return;
+  }
+  const candidates = [path.join(folder, '.promptrc'), path.join(folder, '.promptrc.md')];
+  for (const p of candidates) {
+    try {
+      const raw = fs.readFileSync(p, 'utf8');
+      const trimmed = String(raw || '').trim();
+      if (trimmed) {
+        promptRCText = trimmed;
+        return;
+      }
+    } catch {}
+  }
+  promptRCText = '';
+}
+
+function applyPromptRC(prompt) {
+  const cleanPrompt = String(prompt || '');
+  if (!promptRCText) return cleanPrompt;
+  return '[project_instructions]\n' + promptRCText + '\n[/project_instructions]\n\n' + cleanPrompt;
 }
 
 const QUICK_PROMPT_LAST_KEY = 'copilotLocal.lastQuickPromptTemplate';
@@ -241,7 +276,7 @@ function safeJSONParse(raw) {
   try { return JSON.parse(raw); } catch { return { raw }; }
 }
 
-function requestJSON(method, endpoint, payload) {
+function requestJSON(method, endpoint, payload, abortSignal) {
   const { apiUrl, jwtToken } = getConfig();
   const url = new URL(apiUrl + endpoint);
   const lib = url.protocol === 'https:' ? https : http;
@@ -269,6 +304,16 @@ function requestJSON(method, endpoint, payload) {
       res.on('error', reject);
     });
     req.on('error', reject);
+    if (abortSignal) {
+      const onAbort = () => {
+        try { req.destroy(new Error('aborted')); } catch {}
+      };
+      if (abortSignal.aborted) {
+        onAbort();
+      } else {
+        abortSignal.addEventListener('abort', onAbort, { once: true });
+      }
+    }
     if (body) req.write(body);
     req.end();
   });
@@ -278,6 +323,10 @@ function postJSON(endpoint, payload) {
   return requestJSON('POST', endpoint, payload);
 }
 
+function postJSONAbort(endpoint, payload, abortSignal) {
+  return requestJSON('POST', endpoint, payload, abortSignal);
+}
+
 function getJSON(endpoint) {
   return requestJSON('GET', endpoint);
 }
@@ -285,12 +334,13 @@ function getJSON(endpoint) {
 async function requestChatCompletion(prompt, model, metrics) {
   const startedAt = Date.now();
   const cfg = getConfig();
+  const finalPrompt = applyPromptRC(prompt);
   let content = '';
   let hadError = false;
   try {
     const res = await postJSON('/openai/v1/chat/completions', {
-      model,
-      messages: buildChatMessages(prompt, cfg.lang),
+      model: model || cfg.chatModel,
+      messages: buildChatMessages(finalPrompt, cfg.lang),
       temperature: cfg.temperature,
       stream: false,
     });
@@ -314,6 +364,7 @@ async function requestChatCompletion(prompt, model, metrics) {
 
 function streamHTTP(prompt, model, onChunk, onDone, abortCtl, metrics) {
   const { apiUrl, jwtToken, lang, temperature } = getConfig();
+  const finalPrompt = applyPromptRC(prompt);
   const url = new URL(apiUrl + '/openai/v1/chat/completions');
   const lib = url.protocol === 'https:' ? https : http;
   const startedAt = Date.now();
@@ -331,8 +382,8 @@ function streamHTTP(prompt, model, onChunk, onDone, abortCtl, metrics) {
   };
 
   const body = JSON.stringify({
-    model,
-    messages: buildChatMessages(prompt, lang),
+    model: model || getConfig().chatModel,
+    messages: buildChatMessages(finalPrompt, lang),
     temperature,
     stream: true,
   });
@@ -382,6 +433,7 @@ function streamWS(prompt, model, onChunk, onDone, abortCtl, metrics) {
   }
 
   const { apiUrl, jwtToken, lang, temperature } = getConfig();
+  const finalPrompt = applyPromptRC(prompt);
   if (!jwtToken) {
     onDone(new Error('JWT token requerido para WebSocket'));
     return;
@@ -414,7 +466,7 @@ function streamWS(prompt, model, onChunk, onDone, abortCtl, metrics) {
   }
 
   ws.onopen = () => {
-    ws.send(JSON.stringify({ model, messages: buildChatMessages(prompt, lang), temperature, stream: true }));
+    ws.send(JSON.stringify({ model: model || getConfig().chatModel, messages: buildChatMessages(finalPrompt, lang), temperature, stream: true }));
   };
 
   ws.onmessage = (event) => {
@@ -461,9 +513,10 @@ function streamWS(prompt, model, onChunk, onDone, abortCtl, metrics) {
 }
 
 function streamCLI(prompt, model, onChunk, onDone) {
-  const { cliPath } = getConfig();
+  const { cliPath, chatModel } = getConfig();
+  const finalPrompt = applyPromptRC(prompt);
   const resolved = cliPath || path.join(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '.', 'api', 'bin', 'copilot-cli');
-  const proc = spawn(resolved, ['--model', model, '--prompt', prompt], { stdio: ['pipe', 'pipe', 'pipe'] });
+  const proc = spawn(resolved, ['--model', model || chatModel, '--prompt', finalPrompt], { stdio: ['pipe', 'pipe', 'pipe'] });
   proc.stdout.on('data', (d) => onChunk(d.toString()));
   proc.stderr.on('data', (d) => onChunk(d.toString()));
   proc.on('close', () => onDone());
@@ -605,7 +658,6 @@ function getChatPanelHTML(fontSize, voiceInputEnabled) {
 <html lang="en">
 <head>
 <meta charset="UTF-8"/>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.10.0/styles/github-dark.min.css">
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { font-family: var(--vscode-font-family); font-size: ${fontSize}px; background: var(--vscode-editor-background); color: var(--vscode-editor-foreground); height: 100vh; display: flex; flex-direction: column; }
@@ -660,15 +712,6 @@ button:disabled { opacity: 0.5; cursor: default; }
 <div id="compareView"><div id="compareHeader"><strong>Compare Models</strong><div><span id="compareMeta"></span> <button id="closeCompareBtn">Close</button></div></div><div id="compareGrid"><div class="compareCol"><div class="compareTitle" id="compareLeftTitle">-</div><div class="compareStats" id="compareLeftStats"></div><div class="compareContent" id="compareLeftContent"></div></div><div class="compareCol"><div class="compareTitle" id="compareRightTitle">-</div><div class="compareStats" id="compareRightStats"></div><div class="compareContent" id="compareRightContent"></div></div></div></div>
 <div id="messages"></div>
 <div id="inputRow"><textarea id="prompt" rows="1" placeholder="Ask something..."></textarea><button id="send">Send</button></div>
-<script src="https://cdn.jsdelivr.net/npm/highlight.js@11.10.0/lib/core.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/highlight.js@11.10.0/lib/languages/go.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/highlight.js@11.10.0/lib/languages/javascript.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/highlight.js@11.10.0/lib/languages/typescript.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/highlight.js@11.10.0/lib/languages/python.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/highlight.js@11.10.0/lib/languages/bash.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/highlight.js@11.10.0/lib/languages/json.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/highlight.js@11.10.0/lib/languages/yaml.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/highlight.js@11.10.0/lib/languages/sql.min.js"></script>
 <script>
 const vscode = acquireVsCodeApi();
 const messagesEl = document.getElementById('messages');
@@ -1172,6 +1215,7 @@ window.addEventListener('message', (e) => {
 }
 
 function activate(context) {
+  loadPromptRC();
   const output = vscode.window.createOutputChannel('Copilot Local');
   const metrics = new LocalMetrics(context);
   let chatPanel = null;
@@ -1229,6 +1273,28 @@ function activate(context) {
   qualityStatus.tooltip = 'Local quality alerts';
   qualityStatus.hide();
   context.subscriptions.push(qualityStatus);
+
+  const perfStatus = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 87);
+  perfStatus.text = 'Perf: --';
+  perfStatus.tooltip = 'Latency and tokens/sec';
+  perfStatus.show();
+  context.subscriptions.push(perfStatus);
+
+  const refreshPerfStatus = () => {
+    const snap = metrics.getSnapshot();
+    const avgLatency = Math.round(Number(snap.avg_response_time_ms || 0));
+    const tps = metrics.tokensPerSecondApprox();
+    perfStatus.text = 'Perf: ' + avgLatency + 'ms | ' + tps.toFixed(1) + ' tok/s';
+    perfStatus.tooltip = [
+      'Avg latency: ' + avgLatency + ' ms',
+      'Approx tokens/sec: ' + tps.toFixed(2),
+      'Total tokens approx: ' + Number(snap.total_tokens_approx || 0),
+      'Total requests: ' + Number(snap.total_requests || 0),
+    ].join('\n');
+  };
+  refreshPerfStatus();
+  const perfPoll = setInterval(refreshPerfStatus, 5000);
+  context.subscriptions.push({ dispose: () => clearInterval(perfPoll) });
 
   const restored = loadSessionState();
   if (restored.messages.length > 0 || restored.activeSessionId || restored.selectedModel) {
@@ -1312,6 +1378,7 @@ function activate(context) {
   context.subscriptions.push({ dispose: () => clearInterval(poll) });
 
   const completionDebounce = new Map();
+  const inlineAbort = new Map();
   const inlineProvider = {
     provideInlineCompletionItems: async (document, position) => {
       const cfg = getConfig();
@@ -1321,22 +1388,39 @@ function activate(context) {
       const key = document.uri.toString();
       if (completionDebounce.has(key)) clearTimeout(completionDebounce.get(key));
       await new Promise((resolve) => {
-        const t = setTimeout(resolve, 500);
+        const t = setTimeout(resolve, 300);
         completionDebounce.set(key, t);
       });
 
+      if (inlineAbort.has(key)) {
+        try { inlineAbort.get(key).abort(); } catch {}
+      }
+      const abortCtl = new AbortController();
+      inlineAbort.set(key, abortCtl);
+
       const startLine = Math.max(0, position.line - 49);
-      const range = new vscode.Range(new vscode.Position(startLine, 0), position);
-      const contextText = document.getText(range);
+      const endLine = Math.min(document.lineCount - 1, position.line + 49);
+      const prefixRange = new vscode.Range(new vscode.Position(startLine, 0), position);
+      const suffixRange = new vscode.Range(position, new vscode.Position(endLine, document.lineAt(endLine).text.length));
+      const prefix = applyPromptRC(document.getText(prefixRange));
+      const suffix = document.getText(suffixRange);
       inlineStatus.text = 'Copilot Local: completando...';
       try {
-        const res = await postJSON('/openai/v1/completions', { prompt: contextText, stream: false, max_tokens: 100 });
-        const text = String(res?.choices?.[0]?.text || '').trim();
+        const res = await postJSONAbort('/complete', {
+          model: cfg.fimModel,
+          prefix,
+          suffix,
+          language: normalizeLanguageId(document.languageId),
+          num_predict: 100,
+          temperature: cfg.temperature,
+        }, abortCtl.signal);
+        const text = String(res?.completion || '').trim();
         if (!text) return [];
         return [new vscode.InlineCompletionItem(text, new vscode.Range(position, position))];
       } catch {
         return [];
       } finally {
+        if (inlineAbort.get(key) === abortCtl) inlineAbort.delete(key);
         inlineStatus.text = 'Copilot Local';
       }
     },
@@ -1409,6 +1493,37 @@ function activate(context) {
     return [first.value, second.value];
   };
 
+  const resolveSlashChatPrompt = (rawText) => {
+    const text = String(rawText || '').trim();
+    if (!text.startsWith('/')) return text;
+
+    const editor = vscode.window.activeTextEditor;
+    const selected = editor?.document.getText(editor.selection.isEmpty ? undefined : editor.selection)?.trim() || '';
+    const arg = text.replace(/^\/\w+\s*/, '').trim();
+    const body = arg || selected;
+
+    if (text.toLowerCase().startsWith('/explain')) {
+      return 'Explain this code:\n' + body;
+    }
+    if (text.toLowerCase().startsWith('/refactor')) {
+      return [
+        'Refactor this code for clarity and maintainability.',
+        'Return two sections:',
+        '1) Refactored code',
+        '2) What changed and why (diff-style explanation)',
+        '',
+        body,
+      ].join('\n');
+    }
+    if (text.toLowerCase().startsWith('/test')) {
+      return 'Create robust tests for this code:\n' + body;
+    }
+    if (text.toLowerCase().startsWith('/docstring')) {
+      return 'Add high quality docstrings/comments to this code:\n' + body;
+    }
+    return text;
+  };
+
   async function openChatPanel() {
     if (chatPanel) {
       chatPanel.reveal();
@@ -1436,14 +1551,53 @@ function activate(context) {
     await publishProfileToPanel();
     publishHistory();
 
+    const previewAndApplyCode = async (editor, code, languageHint) => {
+      const hasSelection = !editor.selection.isEmpty;
+      const targetRange = hasSelection
+        ? editor.selection
+        : new vscode.Range(
+          editor.document.positionAt(0),
+          editor.document.positionAt(editor.document.getText().length),
+        );
+      const originalText = editor.document.getText(targetRange);
+      const guessedLanguage = targetEditorLanguage(languageHint) || editor.document.languageId || 'plaintext';
+
+      const originalDoc = await vscode.workspace.openTextDocument({ content: originalText, language: guessedLanguage });
+      const proposedDoc = await vscode.workspace.openTextDocument({ content: code, language: guessedLanguage });
+      const title = hasSelection
+        ? 'Copilot Local Refactor Preview (selection)'
+        : 'Copilot Local Refactor Preview (full file)';
+
+      await vscode.commands.executeCommand('vscode.diff', originalDoc.uri, proposedDoc.uri, title, {
+        preview: true,
+        viewColumn: vscode.ViewColumn.Beside,
+      });
+
+      const decision = await vscode.window.showInformationMessage(
+        'Diff preview abierto. ¿Aplicar cambios propuestos?',
+        'Apply',
+        'Cancel',
+      );
+      if (decision !== 'Apply') return false;
+
+      const edit = new vscode.WorkspaceEdit();
+      edit.replace(editor.document.uri, targetRange, code);
+      const ok = await vscode.workspace.applyEdit(edit);
+      if (ok) {
+        try { await vscode.commands.executeCommand('editor.action.formatDocument'); } catch {}
+      }
+      return ok;
+    };
+
     chatPanel.webview.onDidReceiveMessage(async (msg) => {
       if (msg.type === 'chat') {
-        const model = String(msg.model || getConfig().model);
+        const model = String(msg.model || getConfig().chatModel);
+        const resolvedText = resolveSlashChatPrompt(msg.text);
         selectedModel = model;
         if (activeSessionId) {
           const endpoint = '/api/sessions/' + encodeURIComponent(activeSessionId) + '/chat';
           try {
-            const res = await postJSON(endpoint, { message: msg.text });
+            const res = await postJSON(endpoint, { message: resolvedText });
             if (res?.response) chatPanel?.webview.postMessage({ type: 'chunk', text: String(res.response) });
             chatPanel?.webview.postMessage({ type: 'done' });
             await saveSessionState(loadChatHistory());
@@ -1453,7 +1607,7 @@ function activate(context) {
           return;
         }
 
-        streamWithFallback(msg.text, model,
+        streamWithFallback(resolvedText, model,
           (chunk) => chatPanel?.webview.postMessage({ type: 'chunk', text: chunk }),
           (err) => {
             evaluateQualityAlerts('chat', !!err);
@@ -1562,11 +1716,11 @@ function activate(context) {
       if (msg.type === 'apply') {
         const code = String(msg.code || '');
         if (!code.trim()) return;
-        const ok = await vscode.window.showInformationMessage('Apply code to editor?', 'Yes', 'No');
-        if (ok !== 'Yes') return;
 
         const editor = vscode.window.activeTextEditor;
         if (!editor) {
+          const ok = await vscode.window.showInformationMessage('Apply code to editor?', 'Yes', 'No');
+          if (ok !== 'Yes') return;
           const doc = await vscode.workspace.openTextDocument({ content: code, language: targetEditorLanguage(msg.lang) });
           await vscode.window.showTextDocument(doc, { preview: false });
           return;
@@ -1574,15 +1728,16 @@ function activate(context) {
 
         const isDiff = code.startsWith('---') || code.startsWith('@@');
         if (isDiff) {
+          const ok = await vscode.window.showInformationMessage('Apply code to editor?', 'Yes', 'No');
+          if (ok !== 'Yes') return;
           const edit = new vscode.WorkspaceEdit();
           const fullRange = new vscode.Range(editor.document.positionAt(0), editor.document.positionAt(editor.document.getText().length));
           edit.replace(editor.document.uri, fullRange, code);
           await vscode.workspace.applyEdit(edit);
+          try { await vscode.commands.executeCommand('editor.action.formatDocument'); } catch {}
         } else {
-          await editor.edit((editBuilder) => editBuilder.insert(editor.selection.active, code));
+          await previewAndApplyCode(editor, code, msg.lang);
         }
-
-        try { await vscode.commands.executeCommand('editor.action.formatDocument'); } catch {}
       }
     });
 
@@ -1867,7 +2022,7 @@ function activate(context) {
     await sendSelectionPrompt('Explain this code:');
   }));
   context.subscriptions.push(vscode.commands.registerCommand('copilot-local.refactorSelection', async () => {
-    await sendSelectionPrompt('Refactor this code for clarity:');
+    await sendSelectionPrompt('Refactor this code for clarity. Also include a concise diff-style explanation of what changed and why.');
   }));
   context.subscriptions.push(vscode.commands.registerCommand('copilot-local.fixErrors', async () => {
     await sendSelectionPrompt('Fix the errors in this code:');
@@ -2093,6 +2248,7 @@ function activate(context) {
 
   context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(async (event) => {
     if (!event.affectsConfiguration('copilotLocal')) return;
+    loadPromptRC();
     selectedModel = getConfig().model;
     refreshProfileStatus();
     await publishProfileToPanel();

@@ -78,9 +78,10 @@ type LoginResponse struct {
 }
 
 type OllamaRequest struct {
-	Model  string `json:"model"`
-	Prompt string `json:"prompt"`
-	Stream bool   `json:"stream"`
+	Model     string `json:"model"`
+	Prompt    string `json:"prompt"`
+	Stream    bool   `json:"stream"`
+	KeepAlive string `json:"keep_alive,omitempty"`
 }
 
 type OllamaResponse struct {

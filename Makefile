@@ -1,4 +1,4 @@
-.PHONY: help build test test-integration integration-test run clean docker-build docker-up docker-down lint fmt
+.PHONY: help build test test-integration integration-test run clean docker-build docker-up docker-down lint fmt test-coverage-gate
 
 help: ## Mostrar esta ayuda
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -19,6 +19,13 @@ integration-test: ## Ejecutar harness de integración aislado con Docker Compose
 test-coverage: ## Ejecutar tests con cobertura
 	cd api && go test -v -count=1 -coverprofile=coverage.out ./...
 	cd api && go tool cover -html=coverage.out -o coverage.html
+
+test-coverage-gate: ## Validar cobertura minima (default 70%) en paquetes unitarios criticos
+	cd api && THRESHOLD=$${COVERAGE_THRESHOLD:-70}; \
+	PKGS="./internal/config ./internal/function/runtime_config/... ./internal/server"; \
+	OUT=$$(go test -cover $$PKGS); \
+	echo "$$OUT"; \
+	echo "$$OUT" | awk -v th=$$THRESHOLD '/coverage:/{gsub("%","",$$5); if (($$5+0) < th) {printf("coverage gate failed: %s < %s%%\\n", $$5, th); failed=1}} END {exit failed}'
 
 run: ## Ejecutar el servidor localmente
 	cd api/cmd/server && go run main.go
