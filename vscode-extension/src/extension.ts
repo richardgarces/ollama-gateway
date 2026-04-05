@@ -42,28 +42,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const output = vscode.window.createOutputChannel('Copilot Local');
   context.subscriptions.push(output);
 
-  const openChatStable = vscode.commands.registerCommand('copilot-local.openChat', async () => {
-    try {
-      await vscode.commands.executeCommand('copilot-local.openChatLegacy');
-    } catch (err) {
-      const details = err instanceof Error ? (err.stack || err.message) : String(err);
-      output.appendLine('[openChat][stable-fallback] ' + details);
-      const panel = vscode.window.createWebviewPanel(
-        'copilotLocalChatFallback',
-        'Copilot Local Chat',
-        vscode.ViewColumn.Beside,
-        { enableScripts: false, retainContextWhenHidden: true },
-      );
-      panel.webview.html = `<!doctype html><html><body style="font-family: var(--vscode-font-family); padding: 16px;">
-<h3>Copilot Local - Safe Mode</h3>
-<p>No se pudo abrir el chat legacy.</p>
-<p>Revisa Output: <strong>Copilot Local</strong>.</p>
-<pre style="white-space: pre-wrap;">${details.replace(/[<&>]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c] || c))}</pre>
-</body></html>`;
-    }
-  });
-  context.subscriptions.push(openChatStable);
-
   try {
     // Reuse existing JS extension features while migrating to TypeScript entrypoint.
     // eslint-disable-next-line @typescript-eslint/no-var-requires

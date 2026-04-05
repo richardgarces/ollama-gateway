@@ -1,12 +1,13 @@
 {
   "name": "copilot-local",
   "displayName": "Copilot Local",
-  "description": "Local Copilot extension with HTTP SSE streaming and chat panel",
-  "version": "0.1.7",
+  "description": "Local AI Copilot with sidebar chat, inline completions, RAG and streaming",
+  "version": "0.2.1",
   "engines": {
     "vscode": "^1.60.0"
   },
   "activationEvents": [
+    "onView:copilotLocal.chatView",
     "onCommand:copilot-local.sendSelection",
     "onCommand:copilot-local.openChat",
     "onCommand:copilot-local.debugError",
@@ -52,110 +53,164 @@
     "vscode-languageserver-textdocument": "^1.0.11"
   },
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "copilotLocal",
+          "title": "Copilot Local",
+          "icon": "resources/copilot-local.svg"
+        }
+      ]
+    },
+    "views": {
+      "copilotLocal": [
+        {
+          "type": "webview",
+          "id": "copilotLocal.chatView",
+          "name": "Chat"
+        }
+      ]
+    },
     "commands": [
       {
         "command": "copilot-local.sendSelection",
-        "title": "Copilot Local: Send Selection"
+        "title": "Copilot Local: Send Selection",
+        "icon": "$(rocket)"
       },
       {
         "command": "copilot-local.openChat",
-        "title": "Copilot Local: Open Chat Panel"
+        "title": "Copilot Local: Open Chat Panel",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "copilot-local.openChatLegacy",
+        "title": "Copilot Local: Open Chat (Side Panel)",
+        "icon": "$(comment-discussion)"
       },
       {
         "command": "copilot-local.debugError",
-        "title": "Copilot Local: Debug Error"
+        "title": "Copilot Local: Debug Error",
+        "icon": "$(bug)"
       },
       {
         "command": "copilot-local.translateSelection",
-        "title": "Copilot Local: Translate Selection"
+        "title": "Copilot Local: Translate Selection",
+        "icon": "$(symbol-string)"
       },
       {
         "command": "copilot-local.addTests",
-        "title": "Copilot Local: Add Tests"
+        "title": "Copilot Local: Add Tests",
+        "icon": "$(beaker)"
       },
       {
         "command": "copilot-local.explainSelection",
-        "title": "Copilot Local: Explain Selection"
+        "title": "Copilot Local: Explain Selection",
+        "icon": "$(lightbulb)"
       },
       {
         "command": "copilot-local.refactorSelection",
-        "title": "Copilot Local: Refactor Selection"
+        "title": "Copilot Local: Refactor Selection",
+        "icon": "$(wand)"
       },
       {
         "command": "copilot-local.fixErrors",
-        "title": "Copilot Local: Fix Errors In Selection"
+        "title": "Copilot Local: Fix Errors In Selection",
+        "icon": "$(wrench)"
       },
       {
         "command": "copilot-local.reindex",
-        "title": "Copilot Local: Reindex Repository"
+        "title": "Copilot Local: Reindex Repository",
+        "icon": "$(database)"
       },
       {
         "command": "copilot-local.showStats",
-        "title": "Copilot Local: Show Usage Stats"
+        "title": "Copilot Local: Show Usage Stats",
+        "icon": "$(graph)"
       },
       {
         "command": "copilot-local.joinSession",
-        "title": "Copilot Local: Join Shared Session"
+        "title": "Copilot Local: Join Shared Session",
+        "icon": "$(link)"
       },
       {
         "command": "copilot-local.commitMessage",
-        "title": "Copilot Local: Suggest Commit Message"
+        "title": "Copilot Local: Suggest Commit Message",
+        "icon": "$(git-commit)"
       },
       {
         "command": "copilot-local.quickPrompt",
-        "title": "Copilot Local: Quick Prompt"
+        "title": "Copilot Local: Quick Prompt",
+        "icon": "$(zap)"
       },
       {
         "command": "copilot-local.searchHistory",
-        "title": "Copilot Local: Search Chat History"
+        "title": "Copilot Local: Search Chat History",
+        "icon": "$(search)"
       },
       {
         "command": "copilot-local.compareModels",
-        "title": "Copilot Local: Compare Models"
+        "title": "Copilot Local: Compare Models",
+        "icon": "$(split-horizontal)"
       },
       {
         "command": "copilot-local.openFavorites",
-        "title": "Copilot Local: Open Favorites"
+        "title": "Copilot Local: Open Favorites",
+        "icon": "$(star-full)"
       },
       {
         "command": "copilot-local.resetQualityAlerts",
-        "title": "Copilot Local: Reset Quality Alerts"
+        "title": "Copilot Local: Reset Quality Alerts",
+        "icon": "$(warning)"
       },
       {
         "command": "copilot-local.switchProfile",
-        "title": "Copilot Local: Switch Workspace Profile"
+        "title": "Copilot Local: Switch Workspace Profile",
+        "icon": "$(account)"
       },
       {
         "command": "copilot-local.clearSessionState",
-        "title": "Copilot Local: Clear Session State"
+        "title": "Copilot Local: Clear Session State",
+        "icon": "$(clear-all)"
       },
       {
         "command": "copilot-local.explainTestFailure",
-        "title": "Copilot Local: Explain Test Failure"
+        "title": "Copilot Local: Explain Test Failure",
+        "icon": "$(testing-error-icon)"
       },
       {
         "command": "copilot-local.semanticSearch",
-        "title": "Copilot Local: Semantic Search"
+        "title": "Copilot Local: Semantic Search",
+        "icon": "$(search-fuzzy)"
       },
       {
         "command": "copilot-local.validateLocalModels",
-        "title": "Copilot Local: Validate Local Models"
+        "title": "Copilot Local: Validate Local Models",
+        "icon": "$(check-all)"
       },
       {
         "command": "copilot-local.architectReview",
-        "title": "Copilot Local: Architect Review Current File"
+        "title": "Copilot Local: Architect Review Current File",
+        "icon": "$(symbol-structure)"
       },
       {
         "command": "copilot-local.securityScanCurrentFile",
-        "title": "Copilot Local: Security Scan Current File"
+        "title": "Copilot Local: Security Scan Current File",
+        "icon": "$(shield)"
       },
       {
         "command": "copilot-local.generatePipelineAndOpen",
-        "title": "Copilot Local: Generate Pipeline And Open"
+        "title": "Copilot Local: Generate Pipeline And Open",
+        "icon": "$(server-process)"
       },
       {
         "command": "copilot-local.createPRSummary",
-        "title": "Copilot Local: Create PR Summary"
+        "title": "Copilot Local: Create PR Summary",
+        "icon": "$(git-pull-request)"
+      },
+      {
+        "command": "copilot-local.newChat",
+        "title": "New Chat",
+        "icon": "$(add)"
       }
     ],
     "keybindings": [
@@ -166,7 +221,7 @@
         "when": "editorTextFocus"
       },
       {
-        "command": "copilot-local.openChat",
+        "command": "copilotLocal.chatView.focus",
         "key": "ctrl+alt+k",
         "mac": "cmd+alt+k"
       },
@@ -202,6 +257,53 @@
       }
     ],
     "menus": {
+      "view/title": [
+        {
+          "command": "copilot-local.newChat",
+          "when": "view == copilotLocal.chatView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "copilot-local.openChatLegacy",
+          "when": "view == copilotLocal.chatView",
+          "group": "navigation@2"
+        },
+        {
+          "command": "copilot-local.searchHistory",
+          "when": "view == copilotLocal.chatView",
+          "group": "navigation@3"
+        },
+        {
+          "command": "copilot-local.switchProfile",
+          "when": "view == copilotLocal.chatView",
+          "group": "1_profiles"
+        },
+        {
+          "command": "copilot-local.openFavorites",
+          "when": "view == copilotLocal.chatView",
+          "group": "1_profiles"
+        },
+        {
+          "command": "copilot-local.showStats",
+          "when": "view == copilotLocal.chatView",
+          "group": "2_tools"
+        },
+        {
+          "command": "copilot-local.validateLocalModels",
+          "when": "view == copilotLocal.chatView",
+          "group": "2_tools"
+        },
+        {
+          "command": "copilot-local.reindex",
+          "when": "view == copilotLocal.chatView",
+          "group": "2_tools"
+        },
+        {
+          "command": "copilot-local.clearSessionState",
+          "when": "view == copilotLocal.chatView",
+          "group": "3_session"
+        }
+      ],
       "editor/context": [
         {
           "submenu": "copilotLocal.submenu",

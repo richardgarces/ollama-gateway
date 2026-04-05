@@ -61,6 +61,8 @@ import (
 	onboardingservice "ollama-gateway/internal/function/onboarding"
 	onboardingtransport "ollama-gateway/internal/function/onboarding/transport"
 	openaitransport "ollama-gateway/internal/function/openai/transport"
+	"ollama-gateway/internal/function/ostools"
+	ostoolstransport "ollama-gateway/internal/function/ostools/transport"
 	outboxservice "ollama-gateway/internal/function/outbox"
 	outboxtransport "ollama-gateway/internal/function/outbox/transport"
 	patchservice "ollama-gateway/internal/function/patch"
@@ -247,6 +249,12 @@ func GetRouteDefinitions() []RouteDefinition {
 		{Method: "POST", Path: "/api/patch/sandbox/preview", Description: "Validar patch en sandbox aislado sin tocar repo real", ExampleBody: "{\n  \"response\": \"*** Begin Patch ...\"\n}", Protected: true},
 		{Method: "POST", Path: "/api/patch/sandbox/apply", Description: "Aplicar patch real solo si la validación en sandbox es exitosa", ExampleBody: "{\n  \"response\": \"*** Begin Patch ...\"\n}", Protected: true},
 		{Method: "GET", Path: "/api/guardrails/rules", Description: "Listar reglas de guardrails para apply de patch", ExampleBody: "", Protected: true},
+		{Method: "POST", Path: "/api/os/exec", Description: "Ejecutar comando del sistema en el repo root", ExampleBody: "{\n  \"command\": \"go\",\n  \"args\": [\"version\"]\n}", Protected: true},
+		{Method: "POST", Path: "/api/os/read", Description: "Leer contenido de un archivo", ExampleBody: "{\n  \"path\": \"go.mod\"\n}", Protected: true},
+		{Method: "POST", Path: "/api/os/write", Description: "Escribir contenido a un archivo", ExampleBody: "{\n  \"path\": \"tmp/test.txt\",\n  \"content\": \"hello world\"\n}", Protected: true},
+		{Method: "POST", Path: "/api/os/delete", Description: "Eliminar un archivo", ExampleBody: "{\n  \"path\": \"tmp/test.txt\"\n}", Protected: true},
+		{Method: "POST", Path: "/api/os/list", Description: "Listar contenido de un directorio", ExampleBody: "{\n  \"path\": \".\"\n}", Protected: true},
+		{Method: "POST", Path: "/api/os/exists", Description: "Verificar si un archivo o directorio existe", ExampleBody: "{\n  \"path\": \"go.mod\"\n}", Protected: true},
 	}
 }
 
@@ -544,6 +552,11 @@ func (s *Server) setupRoutes() {
 	patchHandler := patchtransport.NewHandler(s.cfg.RepoRoot, patchService, guardrailsService)
 	sandboxHandler := sandboxtransport.NewHandler(sandboxPatchService)
 	guardrailsHandler := guardrailstransport.NewHandler(guardrailsService)
+	ostoolsService, ostoolsErr := ostools.NewService(s.cfg.RepoRoot, logger)
+	if ostoolsErr != nil {
+		logger.Warn("ostools service no disponible", slog.String("error", ostoolsErr.Error()))
+	}
+	ostoolsHandler := ostoolstransport.NewHandler(ostoolsService)
 	metricsHandler := metricstransport.NewHandler(metricsCollector)
 	contextHandler := contexttransport.NewHandler(contextService)
 	memoryHandler := memorytransport.NewHandler(memoryService)
@@ -745,6 +758,12 @@ func (s *Server) setupRoutes() {
 	mux.Handle("POST /api/patch/sandbox/preview", authMiddleware.JWT(http.HandlerFunc(sandboxHandler.Preview)))
 	mux.Handle("POST /api/patch/sandbox/apply", authMiddleware.JWT(scopeGate("patch:apply", http.HandlerFunc(sandboxHandler.Apply))))
 	mux.Handle("GET /api/guardrails/rules", authMiddleware.JWT(http.HandlerFunc(guardrailsHandler.Rules)))
+	mux.Handle("POST /api/os/exec", authMiddleware.JWT(scopeGate("os:exec", http.HandlerFunc(ostoolsHandler.Exec))))
+	mux.Handle("POST /api/os/read", authMiddleware.JWT(http.HandlerFunc(ostoolsHandler.ReadFile)))
+	mux.Handle("POST /api/os/write", authMiddleware.JWT(scopeGate("os:write", http.HandlerFunc(ostoolsHandler.WriteFile))))
+	mux.Handle("POST /api/os/delete", authMiddleware.JWT(scopeGate("os:write", http.HandlerFunc(ostoolsHandler.DeleteFile))))
+	mux.Handle("POST /api/os/list", authMiddleware.JWT(http.HandlerFunc(ostoolsHandler.ListDir)))
+	mux.Handle("POST /api/os/exists", authMiddleware.JWT(http.HandlerFunc(ostoolsHandler.FileExists)))
 
 	s.router = chain(
 		mux,

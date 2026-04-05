@@ -1282,17 +1282,723 @@ window.addEventListener('message', (e) => {
 </html>`;
 }
 
+function getChatSidebarHTML(fontSize, voiceInputEnabled) {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --chat-font: ${fontSize || 13}px;
+  --accent: var(--vscode-textLink-foreground);
+  --muted: var(--vscode-descriptionForeground);
+  --border: var(--vscode-panel-border);
+  --msg-user-bg: color-mix(in srgb, var(--vscode-textLink-foreground) 8%, transparent);
+  --msg-ai-bg: transparent;
+  --code-bg: color-mix(in srgb, var(--vscode-editor-background) 82%, #000 18%);
+  --hover-bg: color-mix(in srgb, var(--vscode-textLink-foreground) 6%, transparent);
+}
+body { font-family: var(--vscode-font-family); font-size: var(--chat-font); color: var(--vscode-editor-foreground); background: var(--vscode-editor-background); height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+
+/* ── Header ── */
+#header { display: flex; align-items: center; justify-content: space-between; padding: 4px 10px; border-bottom: 1px solid var(--border); min-height: 32px; }
+#leftTools { display: flex; align-items: center; gap: 6px; }
+#rightTools { display: flex; align-items: center; gap: 2px; }
+#profileBadge { font-size: 10px; padding: 1px 6px; border: 1px solid var(--accent); border-radius: 10px; color: var(--accent); cursor: pointer; white-space: nowrap; }
+#modelsHealth { font-size: 10px; color: var(--muted); white-space: nowrap; }
+select#models { background: var(--vscode-dropdown-background); color: var(--vscode-dropdown-foreground); border: 1px solid var(--vscode-dropdown-border); border-radius: 4px; padding: 2px 4px; font-size: 11px; max-width: 130px; }
+.hdr-btn { background: none; border: none; color: var(--muted); cursor: pointer; padding: 3px 4px; border-radius: 4px; font-size: 13px; line-height: 1; display: flex; align-items: center; }
+.hdr-btn:hover { background: var(--hover-bg); color: var(--vscode-editor-foreground); }
+.hdr-btn.active { color: var(--accent); }
+#sessionBanner { display: none; margin: 4px 10px 0; padding: 6px 8px; border: 1px solid var(--accent); border-radius: 6px; color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); font-size: 11px; }
+
+/* ── Compare ── */
+#compareView { display: none; border-bottom: 1px solid var(--border); padding: 8px; }
+#compareHeader { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; font-size: 12px; }
+#compareMeta { font-size: 11px; color: var(--muted); }
+#compareGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.compareCol { border: 1px solid var(--border); border-radius: 6px; padding: 6px; min-height: 80px; background: var(--code-bg); font-size: 12px; }
+.compareTitle { font-weight: 700; margin-bottom: 2px; }
+.compareStats { font-size: 10px; color: var(--muted); margin-bottom: 4px; }
+.compareContent { white-space: pre-wrap; line-height: 1.35; }
+
+/* ── Welcome ── */
+#welcome { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 20px; text-align: center; }
+#welcome.hidden { display: none; }
+.welcome-icon { font-size: 40px; line-height: 1; opacity: 0.5; }
+.welcome-title { font-size: 16px; font-weight: 600; }
+.welcome-subtitle { font-size: 12px; color: var(--muted); max-width: 280px; line-height: 1.5; }
+.welcome-suggestions { display: flex; flex-direction: column; gap: 6px; width: 100%; max-width: 280px; }
+.suggest-btn { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; cursor: pointer; text-align: left; font-size: 12px; color: var(--vscode-editor-foreground); transition: background 0.15s; }
+.suggest-btn:hover { background: var(--hover-bg); border-color: var(--accent); }
+.suggest-btn .suggest-label { font-weight: 600; display: block; margin-bottom: 2px; }
+.suggest-btn .suggest-desc { color: var(--muted); font-size: 11px; }
+
+/* ── Messages ── */
+#messages { flex: 1; overflow-y: auto; padding: 8px 10px; display: none; }
+#messages.visible { display: block; }
+.msg { margin-bottom: 14px; line-height: 1.55; word-wrap: break-word; padding: 8px 10px; border-radius: 10px; }
+.msg.user { background: var(--msg-user-bg); }
+.msg.assistant { background: var(--msg-ai-bg); }
+.msg.highlighted { outline: 2px solid var(--accent); animation: historyPulse 1.5s ease-in-out 1; }
+.msg-header { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+.msg-avatar { width: 20px; height: 20px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; flex-shrink: 0; }
+.msg.user .msg-avatar { background: var(--accent); color: #fff; }
+.msg.assistant .msg-avatar { background: color-mix(in srgb, var(--accent) 20%, transparent); color: var(--accent); }
+.msg-role { font-weight: 600; font-size: 12px; }
+.msg-actions { margin-left: auto; display: flex; gap: 2px; opacity: 0; transition: opacity 0.15s; }
+.msg:hover .msg-actions { opacity: 1; }
+.msg-actions button { background: none; border: none; color: var(--muted); cursor: pointer; padding: 2px 4px; border-radius: 3px; font-size: 12px; }
+.msg-actions button:hover { color: var(--accent); background: var(--hover-bg); }
+.msg-content { white-space: pre-wrap; }
+.focus-meta { font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+.focus-empty { color: var(--muted); font-style: italic; }
+
+/* ── Code blocks ── */
+pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px; overflow-x: auto; margin: 6px 0; position: relative; }
+pre code { font-family: var(--vscode-editor-font-family); font-size: 0.92em; line-height: 1.45; }
+.code-header { display: flex; align-items: center; justify-content: space-between; padding: 4px 10px; background: color-mix(in srgb, var(--border) 30%, transparent); border-radius: 8px 8px 0 0; margin: 6px 0 0; font-size: 11px; color: var(--muted); }
+.code-actions { position: absolute; top: 4px; right: 4px; display: flex; gap: 3px; opacity: 0; transition: opacity 0.15s; }
+pre:hover .code-actions { opacity: 1; }
+.code-actions button { padding: 2px 8px; font-size: 11px; background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; }
+.code-actions button:hover { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
+
+/* ── Slash command popup ── */
+#slashPopup { display: none; position: absolute; bottom: 100%; left: 0; right: 0; background: var(--vscode-editorWidget-background, var(--vscode-editor-background)); border: 1px solid var(--border); border-radius: 6px; margin-bottom: 4px; max-height: 180px; overflow-y: auto; box-shadow: 0 2px 8px rgba(0,0,0,0.2); z-index: 10; }
+#slashPopup.show { display: block; }
+.slash-item { padding: 6px 10px; cursor: pointer; display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.slash-item:hover, .slash-item.active { background: var(--hover-bg); }
+.slash-cmd { font-weight: 600; color: var(--accent); min-width: 80px; }
+.slash-desc { color: var(--muted); }
+
+/* ── Context chips ── */
+#contextChips { display: flex; gap: 4px; flex-wrap: wrap; padding: 0 10px; }
+#contextChips:empty { display: none; }
+.ctx-chip { display: inline-flex; align-items: center; gap: 3px; padding: 2px 8px; font-size: 11px; border: 1px solid var(--border); border-radius: 12px; background: var(--code-bg); color: var(--muted); }
+.ctx-chip .remove { cursor: pointer; font-size: 13px; color: var(--muted); margin-left: 2px; }
+.ctx-chip .remove:hover { color: var(--accent); }
+
+/* ── Input ── */
+#inputArea { position: relative; border-top: 1px solid var(--border); padding: 8px 10px; background: var(--vscode-editor-background); }
+#inputRow { display: flex; align-items: flex-end; gap: 6px; }
+#prompt { flex: 1; background: var(--chat-input-bg, var(--vscode-input-background)); color: var(--chat-input-fg, var(--vscode-input-foreground)); border: 1px solid var(--chat-input-border, var(--vscode-input-border)); border-radius: 8px; padding: 8px 10px; min-height: 36px; max-height: 140px; resize: none; font-family: inherit; font-size: var(--chat-font); line-height: 1.4; outline: none; }
+#prompt:focus { border-color: var(--accent); }
+#prompt::placeholder { color: var(--muted); }
+#sendBtn { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border: none; border-radius: 8px; padding: 8px 10px; cursor: pointer; display: flex; align-items: center; font-size: 14px; }
+#sendBtn:hover { filter: brightness(1.08); }
+#sendBtn:disabled { opacity: 0.4; cursor: default; }
+#stopBtn { display: none; background: var(--vscode-errorForeground); color: #fff; border: none; border-radius: 8px; padding: 8px 10px; cursor: pointer; font-size: 14px; }
+.input-hint { font-size: 11px; color: var(--muted); padding: 4px 0 0; }
+.input-hint kbd { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; font-size: 10px; border: 1px solid var(--border); }
+#voiceControls { display: inline-flex; align-items: center; gap: 3px; }
+#micBtn { background: none; border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; cursor: pointer; color: var(--muted); font-size: 13px; }
+#micBtn:hover { border-color: var(--accent); color: var(--accent); }
+#voiceStatus { font-size: 10px; color: var(--muted); }
+#voiceStatus[data-state="listening"] { color: var(--vscode-testing-iconPassed); }
+
+button.secondary { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); border: 1px solid var(--border); }
+
+@keyframes historyPulse {
+  0% { background: color-mix(in srgb, var(--accent) 24%, transparent); }
+  100% { background: transparent; }
+}
+@keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+.msg { animation: fadeIn 0.2s ease-out; }
+</style>
+</head>
+<body>
+
+<div id="header">
+  <div id="leftTools">
+    <select id="models" title="Modelo activo"></select>
+    <span id="profileBadge" title="Click para cambiar perfil">balanced</span>
+    <span id="modelsHealth" title="Estado de modelos locales"></span>
+  </div>
+  <div id="rightTools">
+    <button class="hdr-btn" id="codeOnlyToggle" title="Code-only mode">{ }</button>
+    <button class="hdr-btn" id="compareBtn" title="Compare models">⇄</button>
+    <button class="hdr-btn" id="exportBtn" title="Export chat">↗</button>
+  </div>
+</div>
+
+<div id="sessionBanner"></div>
+
+<div id="compareView">
+  <div id="compareHeader"><strong>Compare Models</strong><div><span id="compareMeta"></span> <button class="hdr-btn" id="closeCompareBtn" title="Close compare">✕</button></div></div>
+  <div id="compareGrid">
+    <div class="compareCol"><div class="compareTitle" id="compareLeftTitle">-</div><div class="compareStats" id="compareLeftStats"></div><div class="compareContent" id="compareLeftContent"></div></div>
+    <div class="compareCol"><div class="compareTitle" id="compareRightTitle">-</div><div class="compareStats" id="compareRightStats"></div><div class="compareContent" id="compareRightContent"></div></div>
+  </div>
+</div>
+
+<div id="welcome">
+  <div class="welcome-icon">✦</div>
+  <div class="welcome-title">Copilot Local</div>
+  <div class="welcome-subtitle">Tu asistente de IA local. Haz preguntas sobre tu código, genera tests, refactoriza y más.</div>
+  <div class="welcome-suggestions">
+    <button class="suggest-btn" data-prompt="/explain"><span class="suggest-label">✦ Explain Code</span><span class="suggest-desc">Selecciona código y pide una explicación</span></button>
+    <button class="suggest-btn" data-prompt="/test"><span class="suggest-label">🧪 Generate Tests</span><span class="suggest-desc">Crea tests para el código seleccionado</span></button>
+    <button class="suggest-btn" data-prompt="/refactor"><span class="suggest-label">🔧 Refactor</span><span class="suggest-desc">Mejora la claridad y mantenibilidad</span></button>
+    <button class="suggest-btn" data-prompt="/fix"><span class="suggest-label">🐛 Fix Errors</span><span class="suggest-desc">Corrige errores en el código</span></button>
+  </div>
+</div>
+
+<div id="messages"></div>
+
+<div id="contextChips"></div>
+
+<div id="inputArea">
+  <div id="slashPopup"></div>
+  <div id="inputRow">
+    <div id="voiceControls">
+      <button id="micBtn" title="Dictado por voz">🎙</button>
+      <span id="voiceStatus" data-state="stopped"></span>
+    </div>
+    <textarea id="prompt" rows="1" placeholder="Pregunta algo o usa /explain, /test, /fix..."></textarea>
+    <button id="sendBtn" title="Enviar (Enter)">▶</button>
+    <button id="stopBtn" title="Detener generación">■</button>
+  </div>
+  <div class="input-hint"><kbd>Enter</kbd> enviar · <kbd>Shift+Enter</kbd> nueva línea · <kbd>/</kbd> comandos</div>
+</div>
+
+<script>
+const vscode = acquireVsCodeApi();
+const messagesEl = document.getElementById('messages');
+const welcomeEl = document.getElementById('welcome');
+const promptEl = document.getElementById('prompt');
+const sendBtn = document.getElementById('sendBtn');
+const exportBtn = document.getElementById('exportBtn');
+const compareBtn = document.getElementById('compareBtn');
+const stopBtn = document.getElementById('stopBtn');
+const closeCompareBtn = document.getElementById('closeCompareBtn');
+const codeOnlyToggleEl = document.getElementById('codeOnlyToggle');
+const modelsEl = document.getElementById('models');
+const micBtn = document.getElementById('micBtn');
+const voiceStatusEl = document.getElementById('voiceStatus');
+const compareViewEl = document.getElementById('compareView');
+const compareMetaEl = document.getElementById('compareMeta');
+const compareLeftTitleEl = document.getElementById('compareLeftTitle');
+const compareLeftStatsEl = document.getElementById('compareLeftStats');
+const compareLeftContentEl = document.getElementById('compareLeftContent');
+const compareRightTitleEl = document.getElementById('compareRightTitle');
+const compareRightStatsEl = document.getElementById('compareRightStats');
+const compareRightContentEl = document.getElementById('compareRightContent');
+const profileBadgeEl = document.getElementById('profileBadge');
+const modelsHealthEl = document.getElementById('modelsHealth');
+const sessionBannerEl = document.getElementById('sessionBanner');
+const slashPopupEl = document.getElementById('slashPopup');
+const contextChipsEl = document.getElementById('contextChips');
+const voiceEnabled = ${voiceInputEnabled ? 'true' : 'false'};
+let pending = null;
+const chatHistory = [];
+let recognition = null;
+let listening = false;
+let historySyncTimer = null;
+let codeOnlyMode = false;
+let sessionBannerTimer = null;
+let regressionPromptDraft = '';
+let slashActive = -1;
+
+const SLASH_COMMANDS = [
+  { cmd: '/explain', desc: 'Explica el código seleccionado' },
+  { cmd: '/test', desc: 'Genera tests para el código' },
+  { cmd: '/fix', desc: 'Corrige errores en el código' },
+  { cmd: '/refactor', desc: 'Refactoriza para mayor claridad' },
+  { cmd: '/doc', desc: 'Agrega documentación/docstrings' },
+];
+
+function sanitizeHTML(text) {
+  return String(text || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\\"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function showWelcome() { welcomeEl.classList.remove('hidden'); messagesEl.classList.remove('visible'); }
+function hideWelcome() { welcomeEl.classList.add('hidden'); messagesEl.classList.add('visible'); }
+
+function renderMarkdownWithCode(text) {
+  const src = String(text || '');
+  const fence = String.fromCharCode(96) + String.fromCharCode(96) + String.fromCharCode(96);
+  const re = new RegExp(fence + '([a-zA-Z0-9_-]*)\\\\n([\\\\s\\\\S]*?)' + fence, 'g');
+  let i = 0, out = '', m;
+  while ((m = re.exec(src)) !== null) {
+    out += '<span>' + sanitizeHTML(src.slice(i, m.index)).replace(/\\n/g, '<br>') + '</span>';
+    const lang = sanitizeHTML(m[1] || 'plaintext');
+    const code = sanitizeHTML(m[2] || '');
+    out += '<pre><div class="code-actions"><button data-copy="1">Copy</button><button data-apply="1" data-lang="' + lang + '">Apply</button></div><code class="language-' + lang + '">' + code + '</code></pre>';
+    i = m.index + m[0].length;
+  }
+  out += '<span>' + sanitizeHTML(src.slice(i)).replace(/\\n/g, '<br>') + '</span>';
+  return out;
+}
+
+function extractCodeBlocks(text) {
+  const src = String(text || '');
+  const fence = String.fromCharCode(96) + String.fromCharCode(96) + String.fromCharCode(96);
+  const re = new RegExp(fence + '([a-zA-Z0-9_-]*)\\\\n([\\\\s\\\\S]*?)' + fence, 'g');
+  const blocks = [];
+  let m;
+  while ((m = re.exec(src)) !== null) {
+    blocks.push({ lang: String(m[1] || 'plaintext').trim() || 'plaintext', code: String(m[2] || '') });
+  }
+  return blocks;
+}
+
+function renderCodeOnly(text) {
+  const blocks = extractCodeBlocks(text);
+  if (blocks.length === 0) return '<span class="focus-empty">No fenced code blocks</span>';
+  const langs = [...new Set(blocks.map((b) => b.lang.toLowerCase()))];
+  let out = '<div class="focus-meta">' + blocks.length + ' block(s) | ' + sanitizeHTML(langs.join(', ')) + '</div>';
+  blocks.forEach((b) => {
+    const lang = sanitizeHTML(b.lang || 'plaintext');
+    const code = sanitizeHTML(b.code || '');
+    out += '<pre><div class="code-actions"><button data-copy="1">Copy</button><button data-apply="1" data-lang="' + lang + '">Apply</button></div><code class="language-' + lang + '">' + code + '</code></pre>';
+  });
+  return out;
+}
+
+function renderMessageContent(text) {
+  return codeOnlyMode ? renderCodeOnly(text) : renderMarkdownWithCode(text);
+}
+
+function attachCodeActions(root) {
+  root.querySelectorAll('button[data-copy]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const code = btn.closest('pre')?.querySelector('code')?.innerText || '';
+      await navigator.clipboard.writeText(code);
+      btn.textContent = '✓';
+      setTimeout(() => { btn.textContent = 'Copy'; }, 1200);
+    });
+  });
+  root.querySelectorAll('button[data-apply]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const code = btn.closest('pre')?.querySelector('code')?.innerText || '';
+      const lang = btn.getAttribute('data-lang') || '';
+      vscode.postMessage({ type: 'apply', code, lang });
+    });
+  });
+}
+
+function generateMessageId() {
+  return Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+}
+
+function scheduleHistorySync() {
+  if (historySyncTimer) clearTimeout(historySyncTimer);
+  historySyncTimer = setTimeout(() => {
+    vscode.postMessage({ type: 'historyUpdate', messages: chatHistory });
+  }, 80);
+}
+
+function updateFocusStats() {}
+
+function updateProfileBadge(profile) {
+  if (!profileBadgeEl) return;
+  const id = String(profile?.id || 'balanced');
+  profileBadgeEl.textContent = id;
+  profileBadgeEl.title = 'model=' + String(profile?.model || '-') + ' | lang=' + String(profile?.lang || '-') + ' | temp=' + Number(profile?.temperature || 0).toFixed(2) + ' (click to switch)';
+}
+
+function updateModelsHealth(status) {
+  if (!modelsHealthEl) return;
+  const ok = !!status?.ok;
+  const count = Number(status?.count || 0);
+  if (ok) {
+    modelsHealthEl.textContent = count + ' models';
+    modelsHealthEl.title = 'Modelos locales listos (' + count + ')';
+    modelsHealthEl.style.color = '';
+    return;
+  }
+  modelsHealthEl.textContent = '⚠ models';
+  modelsHealthEl.title = String(status?.error || 'Modelos no disponibles');
+  modelsHealthEl.style.color = 'var(--vscode-errorForeground)';
+}
+
+function showSessionBanner(text) {
+  if (!sessionBannerEl) return;
+  if (sessionBannerTimer) clearTimeout(sessionBannerTimer);
+  sessionBannerEl.textContent = String(text || 'session restored');
+  sessionBannerEl.style.display = 'block';
+  sessionBannerTimer = setTimeout(() => { sessionBannerEl.style.display = 'none'; }, 3200);
+}
+
+function rerenderChatKeepingScroll() {
+  const ratio = messagesEl.scrollHeight > 0 ? (messagesEl.scrollTop / messagesEl.scrollHeight) : 0;
+  const pendingId = pending?.dataset.msgId || '';
+  messagesEl.innerHTML = '';
+  for (const item of chatHistory) {
+    const d = createMessageEl(item.role, item.content, item.id);
+    messagesEl.appendChild(d);
+  }
+  pending = pendingId ? messagesEl.querySelector('[data-msg-id="' + pendingId + '"]') || null : null;
+  messagesEl.scrollTop = Math.max(0, Math.round(messagesEl.scrollHeight * ratio));
+}
+
+function createMessageEl(role, text, msgId) {
+  const d = document.createElement('div');
+  d.className = 'msg ' + role;
+  d.dataset.msgId = msgId || generateMessageId();
+
+  const header = document.createElement('div');
+  header.className = 'msg-header';
+
+  const avatar = document.createElement('div');
+  avatar.className = 'msg-avatar';
+  avatar.textContent = role === 'user' ? '👤' : '✦';
+
+  const roleLabel = document.createElement('span');
+  roleLabel.className = 'msg-role';
+  roleLabel.textContent = role === 'user' ? 'You' : 'Copilot Local';
+
+  header.appendChild(avatar);
+  header.appendChild(roleLabel);
+
+  if (role === 'assistant') {
+    const actions = document.createElement('div');
+    actions.className = 'msg-actions';
+    const copyBtn = document.createElement('button');
+    copyBtn.textContent = '📋';
+    copyBtn.title = 'Copy response';
+    copyBtn.addEventListener('click', () => {
+      const item = chatHistory.find((h) => h.id === d.dataset.msgId);
+      navigator.clipboard.writeText(item?.content || d.querySelector('.msg-content')?.innerText || '');
+      copyBtn.textContent = '✓';
+      setTimeout(() => { copyBtn.textContent = '📋'; }, 1200);
+    });
+    const starBtn = document.createElement('button');
+    starBtn.textContent = '⭐';
+    starBtn.title = 'Guardar en favoritos';
+    starBtn.addEventListener('click', () => {
+      const item = chatHistory.find((h) => h.id === d.dataset.msgId);
+      const content = item?.content || d.querySelector('.msg-content')?.innerText || '';
+      if (!content.trim()) return;
+      vscode.postMessage({ type: 'favoriteAdd', content });
+      starBtn.textContent = '★';
+    });
+    actions.appendChild(copyBtn);
+    actions.appendChild(starBtn);
+    header.appendChild(actions);
+  }
+
+  const contentEl = document.createElement('div');
+  contentEl.className = 'msg-content';
+  contentEl.innerHTML = renderMessageContent(text);
+
+  d.appendChild(header);
+  d.appendChild(contentEl);
+  d.querySelectorAll('pre code').forEach((el) => {
+    try { if (window.hljs) window.hljs.highlightElement(el); } catch {}
+  });
+  attachCodeActions(d);
+  return d;
+}
+
+function addMessage(role, text, options = {}) {
+  hideWelcome();
+  const msgId = options.id || generateMessageId();
+  const d = createMessageEl(role, text, msgId);
+  messagesEl.appendChild(d);
+  chatHistory.push({ id: msgId, role, content: text, timestamp: options.timestamp || Date.now() });
+  if (!options.skipSync) scheduleHistorySync();
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+  return d;
+}
+
+function startAssistant() { pending = addMessage('assistant', ''); return pending; }
+
+function updatePending(text) {
+  if (!pending) return;
+  const pendingId = pending.dataset.msgId || '';
+  const item = pendingId ? chatHistory.find((h) => h.id === pendingId) : null;
+  const prev = item?.content || '';
+  const next = prev + text;
+  const contentEl = pending.querySelector('.msg-content');
+  if (contentEl) contentEl.innerHTML = renderMessageContent(next);
+  if (item) { item.content = next; scheduleHistorySync(); }
+  pending.querySelectorAll('pre code').forEach((el) => {
+    try { if (window.hljs) window.hljs.highlightElement(el); } catch {}
+  });
+  attachCodeActions(pending);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+function resetHistoryUI() {
+  messagesEl.innerHTML = '';
+  chatHistory.length = 0;
+  pending = null;
+  showWelcome();
+}
+
+function hydrateHistory(messages) {
+  resetHistoryUI();
+  const list = Array.isArray(messages) ? messages : [];
+  if (list.length === 0) { showWelcome(); return; }
+  hideWelcome();
+  list.forEach((m) => {
+    addMessage(m.role === 'assistant' ? 'assistant' : 'user', String(m.content || ''), {
+      id: String(m.id || ''),
+      timestamp: Number(m.timestamp || Date.now()),
+      skipSync: true,
+    });
+  });
+}
+
+function highlightMessageById(messageId) {
+  const id = String(messageId || '').trim();
+  if (!id) return;
+  const el = messagesEl.querySelector('[data-msg-id="' + id + '"]');
+  if (!el) return;
+  messagesEl.querySelectorAll('.msg.highlighted').forEach((n) => n.classList.remove('highlighted'));
+  el.classList.add('highlighted');
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  setTimeout(() => el.classList.remove('highlighted'), 1800);
+}
+
+function sendNow(text) {
+  if (!text.trim()) return;
+  addMessage('user', text);
+  sendBtn.disabled = true;
+  sendBtn.style.display = 'none';
+  stopBtn.style.display = 'flex';
+  startAssistant();
+  vscode.postMessage({ type: 'chat', text, model: modelsEl.value || '' });
+}
+
+function setRegressionDraft(text) { regressionPromptDraft = String(text || '').trim(); }
+
+/* ── Compare ── */
+function openCompareView() { compareViewEl.style.display = 'block'; }
+function closeCompareView() { compareViewEl.style.display = 'none'; }
+function setComparePending() { openCompareView(); compareMetaEl.textContent = 'comparando...'; compareLeftTitleEl.textContent = '-'; compareRightTitleEl.textContent = '-'; compareLeftStatsEl.textContent = ''; compareRightStatsEl.textContent = ''; compareLeftContentEl.textContent = ''; compareRightContentEl.textContent = ''; }
+function renderCompareResult(payload) {
+  if (!payload) return;
+  openCompareView();
+  compareMetaEl.textContent = payload.prompt ? ('Prompt: ' + String(payload.prompt.length) + ' chars') : '';
+  const left = payload.left || {}, right = payload.right || {};
+  compareLeftTitleEl.textContent = left.model || '-';
+  compareLeftStatsEl.textContent = 'time: ' + (left.elapsedMs || 0) + 'ms | chars: ' + (left.length || 0);
+  compareLeftContentEl.textContent = left.content || '';
+  compareRightTitleEl.textContent = right.model || '-';
+  compareRightStatsEl.textContent = 'time: ' + (right.elapsedMs || 0) + 'ms | chars: ' + (right.length || 0);
+  compareRightContentEl.textContent = right.content || '';
+}
+
+/* ── Voice ── */
+function setVoiceStatus(state, label) { if (voiceStatusEl) { voiceStatusEl.dataset.state = state; voiceStatusEl.textContent = label; } }
+function appendTranscript(text) {
+  const t = String(text || '').trim();
+  if (!t) return;
+  const sep = promptEl.value && !/\\s$/.test(promptEl.value) ? ' ' : '';
+  promptEl.value += sep + t;
+  promptEl.focus();
+}
+function initVoiceInput() {
+  if (!voiceEnabled) { if (micBtn) micBtn.style.display = 'none'; if (voiceStatusEl) voiceStatusEl.style.display = 'none'; return; }
+  const Ctor = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (typeof Ctor !== 'function') { if (micBtn) micBtn.disabled = true; setVoiceStatus('unavailable', ''); return; }
+  recognition = new Ctor();
+  recognition.continuous = true;
+  recognition.interimResults = true;
+  recognition.lang = navigator.language || 'es-ES';
+  recognition.onstart = () => { listening = true; setVoiceStatus('listening', '🔴'); };
+  recognition.onend = () => { listening = false; setVoiceStatus('stopped', ''); };
+  recognition.onerror = () => { listening = false; setVoiceStatus('unavailable', ''); };
+  recognition.onresult = (event) => {
+    let finalText = '';
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      const r = event.results[i];
+      if (r.isFinal && r[0]?.transcript) finalText += r[0].transcript + ' ';
+    }
+    appendTranscript(finalText);
+  };
+  if (micBtn) micBtn.addEventListener('click', () => { try { listening ? recognition.stop() : recognition.start(); } catch { setVoiceStatus('unavailable', ''); } });
+}
+
+/* ── Slash command popup ── */
+function updateSlashPopup() {
+  const val = promptEl.value;
+  if (!val.startsWith('/') || val.includes(' ')) { slashPopupEl.classList.remove('show'); slashActive = -1; return; }
+  const q = val.toLowerCase();
+  const matches = SLASH_COMMANDS.filter(c => c.cmd.startsWith(q));
+  if (matches.length === 0) { slashPopupEl.classList.remove('show'); slashActive = -1; return; }
+  slashPopupEl.innerHTML = matches.map((c, i) =>
+    '<div class="slash-item' + (i === slashActive ? ' active' : '') + '" data-cmd="' + c.cmd + '"><span class="slash-cmd">' + c.cmd + '</span><span class="slash-desc">' + c.desc + '</span></div>'
+  ).join('');
+  slashPopupEl.classList.add('show');
+  slashPopupEl.querySelectorAll('.slash-item').forEach((el) => {
+    el.addEventListener('click', () => {
+      promptEl.value = el.dataset.cmd + ' ';
+      slashPopupEl.classList.remove('show');
+      slashActive = -1;
+      promptEl.focus();
+    });
+  });
+}
+
+/* ── Send ── */
+function send() {
+  const text = promptEl.value.trim();
+  if (!text) return;
+  promptEl.value = '';
+  slashPopupEl.classList.remove('show');
+  sendNow(text);
+}
+
+sendBtn.addEventListener('click', send);
+promptEl.addEventListener('keydown', (e) => {
+  if (slashPopupEl.classList.contains('show')) {
+    const items = slashPopupEl.querySelectorAll('.slash-item');
+    if (e.key === 'ArrowDown') { e.preventDefault(); slashActive = Math.min(slashActive + 1, items.length - 1); updateSlashPopup(); return; }
+    if (e.key === 'ArrowUp') { e.preventDefault(); slashActive = Math.max(slashActive - 1, 0); updateSlashPopup(); return; }
+    if ((e.key === 'Tab' || e.key === 'Enter') && slashActive >= 0 && items[slashActive]) {
+      e.preventDefault();
+      promptEl.value = items[slashActive].dataset.cmd + ' ';
+      slashPopupEl.classList.remove('show');
+      slashActive = -1;
+      return;
+    }
+  }
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+});
+promptEl.addEventListener('input', updateSlashPopup);
+
+exportBtn.addEventListener('click', () => { vscode.postMessage({ type: 'export', messages: chatHistory }); });
+compareBtn.addEventListener('click', () => {
+  const prompt = promptEl.value.trim();
+  if (!prompt) return;
+  setComparePending();
+  vscode.postMessage({ type: 'compare', text: prompt });
+});
+stopBtn.addEventListener('click', () => {
+  vscode.postMessage({ type: 'cancelChat' });
+  stopBtn.style.display = 'none';
+  sendBtn.style.display = 'flex';
+  sendBtn.disabled = false;
+});
+modelsEl.addEventListener('change', () => { vscode.postMessage({ type: 'modelSelected', model: modelsEl.value || '' }); });
+closeCompareBtn.addEventListener('click', closeCompareView);
+codeOnlyToggleEl.addEventListener('click', () => {
+  codeOnlyMode = !codeOnlyMode;
+  codeOnlyToggleEl.classList.toggle('active', codeOnlyMode);
+  rerenderChatKeepingScroll();
+});
+profileBadgeEl.addEventListener('click', () => { vscode.postMessage({ type: 'switchProfile' }); });
+
+/* Welcome suggestions */
+document.querySelectorAll('.suggest-btn').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const cmd = btn.dataset.prompt || '';
+    promptEl.value = cmd + ' ';
+    promptEl.focus();
+  });
+});
+
+initVoiceInput();
+
+window.addEventListener('message', (e) => {
+  const msg = e.data;
+  if (msg.type === 'chunk') { updatePending(msg.text || ''); return; }
+  if (msg.type === 'done') { pending = null; sendBtn.disabled = false; sendBtn.style.display = 'flex'; stopBtn.style.display = 'none'; return; }
+  if (msg.type === 'error') { updatePending('\\n[Error: ' + (msg.text || 'unknown') + ']'); pending = null; sendBtn.disabled = false; sendBtn.style.display = 'flex'; stopBtn.style.display = 'none'; return; }
+  if (msg.type === 'prefill') { promptEl.value = msg.text || ''; promptEl.focus(); return; }
+  if (msg.type === 'runPrompt') { sendNow(msg.text || ''); return; }
+  if (msg.type === 'externalResult') { addMessage('assistant', msg.text || ''); return; }
+  if (msg.type === 'hydrateHistory') { hydrateHistory(msg.messages || []); return; }
+  if (msg.type === 'highlightHistory') { highlightMessageById(msg.id || ''); return; }
+  if (msg.type === 'historyCleared') { resetHistoryUI(); return; }
+  if (msg.type === 'compareStart') { setComparePending(); return; }
+  if (msg.type === 'compareResult') { renderCompareResult(msg); return; }
+  if (msg.type === 'openCompareMode') { openCompareView(); return; }
+  if (msg.type === 'models') {
+    const models = Array.isArray(msg.models) ? msg.models : [];
+    const current = msg.current || '';
+    modelsEl.innerHTML = '';
+    const arr = models.length > 0 ? models : [current || 'local-rag'];
+    arr.forEach((m) => { const opt = document.createElement('option'); opt.value = m; opt.textContent = m; modelsEl.appendChild(opt); });
+    modelsEl.value = arr.includes(current) ? current : arr[0];
+    return;
+  }
+  if (msg.type === 'profileUpdate') { updateProfileBadge(msg.profile || {}); return; }
+  if (msg.type === 'modelsValidation') { updateModelsHealth(msg); return; }
+  if (msg.type === 'sessionRestored') { showSessionBanner(msg.text || 'session restored'); return; }
+  if (msg.type === 'regressionDraft') { setRegressionDraft(msg.text || ''); return; }
+  if (msg.type === 'contextFile') {
+    const file = String(msg.file || '').trim();
+    if (!file) return;
+    const chip = document.createElement('span');
+    chip.className = 'ctx-chip';
+    chip.innerHTML = '📄 ' + sanitizeHTML(file.split('/').pop() || file) + '<span class="remove" title="Remove">×</span>';
+    chip.querySelector('.remove').addEventListener('click', () => chip.remove());
+    contextChipsEl.appendChild(chip);
+    return;
+  }
+});
+</script>
+</body>
+</html>`;
+}
+
+class CopilotLocalChatViewProvider {
+  constructor(extensionUri, getState) {
+    this._extensionUri = extensionUri;
+    this._getState = getState;
+    this._view = null;
+  }
+
+  resolveWebviewView(webviewView) {
+    this._view = webviewView;
+    webviewView.webview.options = { enableScripts: true, localResourceRoots: [this._extensionUri] };
+    const state = this._getState();
+    webviewView.webview.html = getChatSidebarHTML(state.fontSize, state.voiceInputEnabled);
+    if (state.onReady) state.onReady(webviewView);
+  }
+
+  get view() { return this._view; }
+}
+
 function activate(context) {
   loadPromptRC();
   const output = vscode.window.createOutputChannel('Copilot Local');
   const metrics = new LocalMetrics(context);
   let chatPanel = null;
+  let sidebarReady = false;
   let activeSessionId = '';
   let selectedModel = getConfig().model;
   let activeChatAbort = null;
   let consecutiveErrors = 0;
   const activeQualityAlerts = new Set();
   let shouldShowRestoredBanner = false;
+
+  // ── Sidebar Chat View Provider ──
+  const chatViewProvider = new CopilotLocalChatViewProvider(context.extensionUri, () => {
+    const cfg = getConfig();
+    return {
+      fontSize: cfg.chatFontSize,
+      voiceInputEnabled: cfg.voiceInputEnabled,
+      onReady: (webviewView) => {
+        sidebarReady = true;
+        setupWebviewMessageHandler(webviewView.webview, 'sidebar');
+        publishProfileToWebview(webviewView.webview);
+        const restoredState = loadSessionState();
+        const messages = restoredState.messages.length > 0 ? restoredState.messages : loadChatHistory();
+        webviewView.webview.postMessage({ type: 'hydrateHistory', messages });
+        if (shouldShowRestoredBanner) {
+          webviewView.webview.postMessage({ type: 'sessionRestored', text: 'session restored' });
+          shouldShowRestoredBanner = false;
+        }
+      },
+    };
+  });
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider('copilotLocal.chatView', chatViewProvider, { webviewOptions: { retainContextWhenHidden: true } })
+  );
+
+  // ── Status Bar (consolidated, Copilot-style) ──
+  const mainStatus = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 90);
+  mainStatus.text = '$(sparkle) Copilot Local';
+  mainStatus.tooltip = 'Copilot Local – Click to open chat';
+  mainStatus.command = 'copilotLocal.chatView.focus';
+  mainStatus.show();
+  context.subscriptions.push(mainStatus);
 
   const profileStatus = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 88);
   profileStatus.command = 'copilot-local.switchProfile';
@@ -1331,9 +2037,9 @@ function activate(context) {
     return normalized;
   };
 
-  const inlineStatus = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 90);
-  inlineStatus.text = 'Copilot Local';
-  inlineStatus.tooltip = 'Inline completions status';
+  const inlineStatus = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 89);
+  inlineStatus.text = '$(sparkle)';
+  inlineStatus.tooltip = 'Copilot Local – Inline completions active';
   inlineStatus.show();
   context.subscriptions.push(inlineStatus);
 
@@ -1372,6 +2078,201 @@ function activate(context) {
     shouldShowRestoredBanner = true;
     saveChatHistory(restored.messages).catch(() => {});
   }
+
+  // ── Helpers to send to whichever webview is active (sidebar or panel) ──
+  const getActiveWebview = () => {
+    if (chatViewProvider.view) return chatViewProvider.view.webview;
+    if (chatPanel) return chatPanel.webview;
+    return null;
+  };
+
+  const focusChatAndGetWebview = async () => {
+    try { await vscode.commands.executeCommand('copilotLocal.chatView.focus'); } catch {}
+    let wv = getActiveWebview();
+    if (!wv) {
+      const panel = await openChatPanel();
+      wv = panel.webview;
+    }
+    return wv;
+  };
+
+  const postToChat = (msg) => {
+    const wv = getActiveWebview();
+    if (wv) wv.postMessage(msg);
+  };
+
+  const publishProfileToWebview = async (webview) => {
+    const cfg = getConfig();
+    const models = await getAvailableModels();
+    const currentModel = selectedModel || cfg.model;
+    webview.postMessage({ type: 'models', models, current: currentModel });
+    webview.postMessage({
+      type: 'profileUpdate',
+      profile: {
+        id: cfg.activeProfileId,
+        model: currentModel,
+        lang: cfg.lang,
+        temperature: cfg.temperature,
+      },
+    });
+    const mStatus = await validateLocalModels();
+    webview.postMessage({
+      type: 'modelsValidation',
+      ok: mStatus.ok,
+      count: mStatus.count,
+      source: mStatus.source,
+      error: mStatus.error || '',
+    });
+  };
+
+  const previewAndApplyCode = async (editor, code, languageHint) => {
+    const hasSelection = !editor.selection.isEmpty;
+    const targetRange = hasSelection
+      ? editor.selection
+      : new vscode.Range(editor.document.positionAt(0), editor.document.positionAt(editor.document.getText().length));
+    const originalText = editor.document.getText(targetRange);
+    const guessedLanguage = targetEditorLanguage(languageHint) || editor.document.languageId || 'plaintext';
+    const originalDoc = await vscode.workspace.openTextDocument({ content: originalText, language: guessedLanguage });
+    const proposedDoc = await vscode.workspace.openTextDocument({ content: code, language: guessedLanguage });
+    const title = hasSelection ? 'Copilot Local Refactor Preview (selection)' : 'Copilot Local Refactor Preview (full file)';
+    await vscode.commands.executeCommand('vscode.diff', originalDoc.uri, proposedDoc.uri, title, { preview: true, viewColumn: vscode.ViewColumn.Beside });
+    const decision = await vscode.window.showInformationMessage('Diff preview abierto. ¿Aplicar cambios propuestos?', 'Apply', 'Cancel');
+    if (decision !== 'Apply') return false;
+    const edit = new vscode.WorkspaceEdit();
+    edit.replace(editor.document.uri, targetRange, code);
+    const ok = await vscode.workspace.applyEdit(edit);
+    if (ok) { try { await vscode.commands.executeCommand('editor.action.formatDocument'); } catch {} }
+    return ok;
+  };
+
+  const setupWebviewMessageHandler = (webview, source) => {
+    webview.onDidReceiveMessage(async (msg) => {
+      if (msg.type === 'cancelChat') {
+        if (activeChatAbort) { try { activeChatAbort.abort(); } catch {} activeChatAbort = null; }
+        webview.postMessage({ type: 'done' });
+        return;
+      }
+      if (msg.type === 'switchProfile') {
+        vscode.commands.executeCommand('copilot-local.switchProfile');
+        return;
+      }
+      if (msg.type === 'chat') {
+        const model = String(msg.model || getConfig().chatModel);
+        const resolvedText = resolveSlashChatPrompt(msg.text);
+        selectedModel = model;
+        if (activeSessionId) {
+          const endpoint = '/api/sessions/' + encodeURIComponent(activeSessionId) + '/chat';
+          try {
+            const res = await postJSON(endpoint, { message: resolvedText });
+            if (res?.response) webview.postMessage({ type: 'chunk', text: String(res.response) });
+            webview.postMessage({ type: 'done' });
+            await saveSessionState(loadChatHistory());
+          } catch (err) {
+            webview.postMessage({ type: 'error', text: err instanceof Error ? err.message : String(err) });
+          }
+          return;
+        }
+        streamWithFallback(resolvedText, model,
+          (chunk) => webview.postMessage({ type: 'chunk', text: chunk }),
+          (err) => {
+            evaluateQualityAlerts('chat', !!err);
+            if (err) webview.postMessage({ type: 'error', text: err.message });
+            else webview.postMessage({ type: 'done' });
+          },
+        );
+        return;
+      }
+      if (msg.type === 'compare') {
+        const prompt = String(msg.text || '').trim();
+        if (!prompt) { webview.postMessage({ type: 'error', text: 'Prompt vacío' }); return; }
+        const selected = await chooseTwoModels();
+        if (!selected) return;
+        webview.postMessage({ type: 'compareStart' });
+        try {
+          const [left, right] = await Promise.all([
+            requestChatCompletion(prompt, selected[0], metrics),
+            requestChatCompletion(prompt, selected[1], metrics),
+          ]);
+          await evaluateQualityAlerts('compare', false);
+          webview.postMessage({ type: 'compareResult', prompt, left, right });
+        } catch (err) {
+          await evaluateQualityAlerts('compare', true);
+          webview.postMessage({ type: 'error', text: err instanceof Error ? err.message : String(err) });
+        }
+        return;
+      }
+      if (msg.type === 'export') {
+        const format = await vscode.window.showQuickPick([
+          { label: 'Markdown', value: 'md' },
+          { label: 'JSON', value: 'json' },
+          { label: 'Text', value: 'txt' },
+        ], { title: 'Export chat history' });
+        if (!format) return;
+        const messages = Array.isArray(msg.messages) ? msg.messages : [];
+        let content = '', language = 'plaintext';
+        if (format.value === 'md') { language = 'markdown'; content = messages.map((m) => '## ' + (m.role === 'user' ? 'User' : 'Assistant') + '\\n\\n' + (m.content || '')).join('\\n\\n'); }
+        else if (format.value === 'json') { language = 'json'; content = JSON.stringify(messages, null, 2); }
+        else { content = messages.map((m) => (m.role === 'user' ? 'You: ' : 'AI: ') + (m.content || '')).join('\\n\\n'); }
+        const doc = await vscode.workspace.openTextDocument({ content, language });
+        await vscode.window.showTextDocument(doc, { preview: false });
+        return;
+      }
+      if (msg.type === 'historyUpdate') {
+        const normalized = await saveChatHistory(msg.messages);
+        await saveSessionState(normalized);
+        return;
+      }
+      if (msg.type === 'modelSelected') {
+        selectedModel = String(msg.model || '').trim() || getConfig().model;
+        await saveSessionState(loadChatHistory());
+        return;
+      }
+      if (msg.type === 'clearHistoryRequest') {
+        const confirmed = await vscode.window.showWarningMessage('¿Borrar historial de chat?', 'Clear', 'Cancel');
+        if (confirmed !== 'Clear') return;
+        await saveChatHistory([]);
+        await saveSessionState([]);
+        webview.postMessage({ type: 'historyCleared' });
+        vscode.window.showInformationMessage('Historial de chat limpiado');
+        return;
+      }
+      if (msg.type === 'favoriteAdd') {
+        const content = String(msg.content || '').trim();
+        if (!content) return;
+        const favorites = loadFavorites();
+        if (favorites.some((f) => f.content.trim() === content)) { vscode.window.showInformationMessage('Ya está en favoritos'); return; }
+        favorites.push({ id: Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8), title: buildFavoriteTitle(content), content, timestamp: Date.now() });
+        await saveFavorites(favorites);
+        vscode.window.showInformationMessage('Favorito guardado');
+        return;
+      }
+      if (msg.type === 'apply') {
+        const code = String(msg.code || '');
+        if (!code.trim()) return;
+        const editor = vscode.window.activeTextEditor;
+        if (!editor) {
+          const ok = await vscode.window.showInformationMessage('Apply code to editor?', 'Yes', 'No');
+          if (ok !== 'Yes') return;
+          const doc = await vscode.workspace.openTextDocument({ content: code, language: targetEditorLanguage(msg.lang) });
+          await vscode.window.showTextDocument(doc, { preview: false });
+          return;
+        }
+        const isDiff = code.startsWith('---') || code.startsWith('@@');
+        if (isDiff) {
+          const ok = await vscode.window.showInformationMessage('Apply code to editor?', 'Yes', 'No');
+          if (ok !== 'Yes') return;
+          const edit = new vscode.WorkspaceEdit();
+          const fullRange = new vscode.Range(editor.document.positionAt(0), editor.document.positionAt(editor.document.getText().length));
+          edit.replace(editor.document.uri, fullRange, code);
+          await vscode.workspace.applyEdit(edit);
+          try { await vscode.commands.executeCommand('editor.action.formatDocument'); } catch {}
+        } else {
+          await previewAndApplyCode(editor, code, msg.lang);
+        }
+        return;
+      }
+    });
+  };
 
   const evaluateQualityAlerts = async (source, hadError) => {
     const cfg = getConfig();
@@ -1473,7 +2374,8 @@ function activate(context) {
       const suffixRange = new vscode.Range(position, new vscode.Position(endLine, document.lineAt(endLine).text.length));
       const prefix = applyPromptRC(document.getText(prefixRange));
       const suffix = document.getText(suffixRange);
-      inlineStatus.text = 'Copilot Local: completando...';
+      inlineStatus.text = '$(loading~spin) Completing...';
+      mainStatus.text = '$(loading~spin) Copilot Local';
       try {
         const res = await postJSONAbort('/complete', {
           model: cfg.fimModel,
@@ -1490,7 +2392,8 @@ function activate(context) {
         return [];
       } finally {
         if (inlineAbort.get(key) === abortCtl) inlineAbort.delete(key);
-        inlineStatus.text = 'Copilot Local';
+        inlineStatus.text = '$(sparkle)';
+        mainStatus.text = '$(sparkle) Copilot Local';
       }
     },
   };
@@ -1553,15 +2456,10 @@ function activate(context) {
   };
 
   const publishModelsValidationToPanel = async () => {
-    if (!chatPanel) return;
     const status = await validateLocalModels();
-    chatPanel.webview.postMessage({
-      type: 'modelsValidation',
-      ok: status.ok,
-      count: status.count,
-      source: status.source,
-      error: status.error || '',
-    });
+    const msg = { type: 'modelsValidation', ok: status.ok, count: status.count, source: status.source, error: status.error || '' };
+    if (chatPanel) chatPanel.webview.postMessage(msg);
+    if (chatViewProvider.view) chatViewProvider.view.webview.postMessage(msg);
   };
 
   const getAvailableModels = async () => {
@@ -1575,20 +2473,13 @@ function activate(context) {
   };
 
   const publishProfileToPanel = async () => {
-    if (!chatPanel) return;
     const cfg = getConfig();
     const models = await getAvailableModels();
     const currentModel = selectedModel || cfg.model;
-    chatPanel.webview.postMessage({ type: 'models', models, current: currentModel });
-    chatPanel.webview.postMessage({
-      type: 'profileUpdate',
-      profile: {
-        id: cfg.activeProfileId,
-        model: currentModel,
-        lang: cfg.lang,
-        temperature: cfg.temperature,
-      },
-    });
+    const profileMsg = { type: 'profileUpdate', profile: { id: cfg.activeProfileId, model: currentModel, lang: cfg.lang, temperature: cfg.temperature } };
+    const modelsMsg = { type: 'models', models, current: currentModel };
+    if (chatPanel) { chatPanel.webview.postMessage(modelsMsg); chatPanel.webview.postMessage(profileMsg); }
+    if (chatViewProvider.view) { chatViewProvider.view.webview.postMessage(modelsMsg); chatViewProvider.view.webview.postMessage(profileMsg); }
     await publishModelsValidationToPanel();
   };
 
@@ -1899,8 +2790,12 @@ function activate(context) {
       vscode.window.showInformationMessage('No hay contenido seleccionado');
       return;
     }
-    const panel = await openChatPanel();
-    panel.webview.postMessage({ type: 'runPrompt', text: prefix + '\n' + selected });
+    try { await vscode.commands.executeCommand('copilotLocal.chatView.focus'); } catch { await openChatPanel(); }
+    const wv = getActiveWebview();
+    if (wv) {
+      wv.postMessage({ type: 'contextFile', file: editor.document.fileName });
+      wv.postMessage({ type: 'runPrompt', text: prefix + '\n' + selected });
+    }
   }
 
   context.subscriptions.push(vscode.commands.registerCommand('copilot-local.sendSelection', async () => {
@@ -1925,6 +2820,27 @@ function activate(context) {
         output.appendLine('\n--- Done ---');
       },
     );
+  }));
+
+  // ── Open Chat: Focus sidebar view ──
+  context.subscriptions.push(vscode.commands.registerCommand('copilot-local.openChat', async () => {
+    try {
+      await vscode.commands.executeCommand('copilotLocal.chatView.focus');
+    } catch {
+      // Fallback to legacy panel
+      try { await openChatPanel(); } catch (err) {
+        output.appendLine('[openChat][error] ' + (err instanceof Error ? err.message : String(err)));
+      }
+    }
+  }));
+
+  // ── New Chat: Clear and focus sidebar ──
+  context.subscriptions.push(vscode.commands.registerCommand('copilot-local.newChat', async () => {
+    await saveChatHistory([]);
+    await saveSessionState([]);
+    const wv = getActiveWebview();
+    if (wv) wv.postMessage({ type: 'historyCleared' });
+    try { await vscode.commands.executeCommand('copilotLocal.chatView.focus'); } catch {}
   }));
 
   context.subscriptions.push(vscode.commands.registerCommand('copilot-local.openChatLegacy', async () => {
@@ -2089,8 +3005,10 @@ function activate(context) {
   context.subscriptions.push(vscode.commands.registerCommand('copilot-local.sendSelectionToChat', async () => {
     const editor = vscode.window.activeTextEditor;
     const text = editor?.document.getText(editor.selection.isEmpty ? undefined : editor.selection) || '';
-    const panel = await openChatPanel();
-    if (text.trim()) panel.webview.postMessage({ type: 'prefill', text });
+    try { await vscode.commands.executeCommand('copilotLocal.chatView.focus'); } catch { await openChatPanel(); }
+    const wv = getActiveWebview();
+    if (wv && editor) wv.postMessage({ type: 'contextFile', file: editor.document.fileName });
+    if (wv && text.trim()) wv.postMessage({ type: 'prefill', text });
   }));
 
   context.subscriptions.push(vscode.commands.registerCommand('copilot-local.quickPrompt', async () => {
@@ -2122,8 +3040,8 @@ function activate(context) {
     if (!picked) return;
 
     const finalPrompt = applyTemplateToSelection(picked.value.template, selected);
-    const panel = await openChatPanel();
-    panel.webview.postMessage({ type: 'prefill', text: finalPrompt });
+    const wv = await focusChatAndGetWebview();
+    wv.postMessage({ type: 'prefill', text: finalPrompt });
     await context.workspaceState.update(QUICK_PROMPT_LAST_KEY, picked.value.id);
   }));
 
@@ -2169,14 +3087,14 @@ function activate(context) {
     });
     if (!picked) return;
 
-    const panel = await openChatPanel();
-    panel.webview.postMessage({ type: 'hydrateHistory', messages: history });
-    panel.webview.postMessage({ type: 'highlightHistory', id: picked.value.id });
+    const wv = await focusChatAndGetWebview();
+    wv.postMessage({ type: 'hydrateHistory', messages: history });
+    wv.postMessage({ type: 'highlightHistory', id: picked.value.id });
   }));
 
   context.subscriptions.push(vscode.commands.registerCommand('copilot-local.compareModels', async () => {
-    const panel = await openChatPanel();
-    panel.webview.postMessage({ type: 'openCompareMode' });
+    const wv = await focusChatAndGetWebview();
+    wv.postMessage({ type: 'openCompareMode' });
 
     const editor = vscode.window.activeTextEditor;
     const selected = editor?.document.getText(editor.selection.isEmpty ? undefined : editor.selection)?.trim() || '';
@@ -2185,22 +3103,22 @@ function activate(context) {
       return;
     }
 
-    panel.webview.postMessage({ type: 'prefill', text: selected });
+    wv.postMessage({ type: 'prefill', text: selected });
     const selectedModels = await chooseTwoModels();
     if (!selectedModels) return;
     const [leftModel, rightModel] = selectedModels;
 
-    panel.webview.postMessage({ type: 'compareStart' });
+    wv.postMessage({ type: 'compareStart' });
     try {
       const [left, right] = await Promise.all([
         requestChatCompletion(selected, leftModel, metrics),
         requestChatCompletion(selected, rightModel, metrics),
       ]);
       await evaluateQualityAlerts('compare-command', false);
-      panel.webview.postMessage({ type: 'compareResult', prompt: selected, left, right });
+      wv.postMessage({ type: 'compareResult', prompt: selected, left, right });
     } catch (err) {
       await evaluateQualityAlerts('compare-command', true);
-      panel.webview.postMessage({ type: 'error', text: err instanceof Error ? err.message : String(err) });
+      wv.postMessage({ type: 'error', text: err instanceof Error ? err.message : String(err) });
     }
   }));
 
@@ -2319,8 +3237,8 @@ function activate(context) {
         ...(Array.isArray(result.related_files) && result.related_files.length > 0 ? result.related_files.map((v) => '- ' + v) : ['- N/A']),
       ].join('\n');
 
-      const panel = await openChatPanel();
-      panel.webview.postMessage({ type: 'externalResult', text });
+      const wv = await focusChatAndGetWebview();
+      wv.postMessage({ type: 'externalResult', text });
     } catch (err) {
       vscode.window.showErrorMessage('Debug analysis failed: ' + (err instanceof Error ? err.message : String(err)));
     }
@@ -2415,9 +3333,9 @@ function activate(context) {
       return;
     }
 
-    const panel = await openChatPanel();
-    panel.webview.postMessage({ type: 'regressionDraft', text: ctx.regressionPrompt });
-    panel.webview.postMessage({ type: 'runPrompt', text: ctx.prompt });
+    const wv = await focusChatAndGetWebview();
+    wv.postMessage({ type: 'regressionDraft', text: ctx.regressionPrompt });
+    wv.postMessage({ type: 'runPrompt', text: ctx.prompt });
     vscode.window.showInformationMessage('Analisis de test failure enviado al chat (' + ctx.source + ')');
   }));
 
@@ -2431,8 +3349,8 @@ function activate(context) {
       await postJSON(endpoint, {});
       activeSessionId = cleanID;
       await saveSessionState(loadChatHistory());
-      const panel = await openChatPanel();
-      panel.webview.postMessage({ type: 'externalResult', text: 'Connected to shared session: ' + cleanID });
+      const wv = await focusChatAndGetWebview();
+      wv.postMessage({ type: 'externalResult', text: 'Connected to shared session: ' + cleanID });
     } catch (err) {
       vscode.window.showErrorMessage('Join session failed: ' + (err instanceof Error ? err.message : String(err)));
     }
@@ -2503,8 +3421,8 @@ function activate(context) {
         }
       }
 
-      const panel = await openChatPanel();
-      panel.webview.postMessage({ type: 'externalResult', text: lines.join('\n') });
+      const wv = await focusChatAndGetWebview();
+      wv.postMessage({ type: 'externalResult', text: lines.join('\n') });
     } catch (err) {
       vscode.window.showErrorMessage('Architect review failed: ' + (err instanceof Error ? err.message : String(err)));
     }
@@ -2533,8 +3451,8 @@ function activate(context) {
           lines.push('- [' + String(f?.severity || 'medium') + '] line ' + String(f?.line || 0) + ': ' + String(f?.description || '')); 
         }
       }
-      const panel = await openChatPanel();
-      panel.webview.postMessage({ type: 'externalResult', text: lines.join('\n') });
+      const wv = await focusChatAndGetWebview();
+      wv.postMessage({ type: 'externalResult', text: lines.join('\n') });
     } catch (err) {
       vscode.window.showErrorMessage('Security scan failed: ' + (err instanceof Error ? err.message : String(err)));
     }
@@ -2585,8 +3503,8 @@ function activate(context) {
     try {
       const result = await postJSON('/api/pr/summary', { diff });
       const text = String(result?.summary || result?.executive_summary || JSON.stringify(result, null, 2)).trim();
-      const panel = await openChatPanel();
-      panel.webview.postMessage({ type: 'externalResult', text: 'PR Summary\n\n' + text });
+      const wv = await focusChatAndGetWebview();
+      wv.postMessage({ type: 'externalResult', text: 'PR Summary\n\n' + text });
       await vscode.env.clipboard.writeText(text);
       vscode.window.showInformationMessage('PR summary generado y copiado al portapapeles');
     } catch (err) {
