@@ -39,7 +39,7 @@ func (s *RepoService) Refactor(absPath string) (string, error) {
 	}
 
 	prompt := "Eres un senior Go developer. Mejora este código:\n" + string(data)
-	return s.ollamaService.Generate("deepseek-coder:6.7b", prompt)
+	return s.ollamaService.Generate(s.ollamaService.ChatModelName(), prompt)
 }
 
 func (s *RepoService) AnalyzeRepo() (string, error) {

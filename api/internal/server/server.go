@@ -137,6 +137,7 @@ func GetRouteDefinitions() []RouteDefinition {
 		{Method: "GET", Path: "/health", Description: "Liveness probe", ExampleBody: "", Protected: false},
 		{Method: "GET", Path: "/health/liveness", Description: "Liveness detail", ExampleBody: "", Protected: false},
 		{Method: "GET", Path: "/health/readiness", Description: "Readiness probe", ExampleBody: "", Protected: false},
+		{Method: "GET", Path: "/health/readiness/{name}", Description: "Health check de un backend individual", ExampleBody: "", Protected: false},
 		{Method: "GET", Path: "/metrics", Description: "Metricas JSON internas", ExampleBody: "", Protected: false},
 		{Method: "GET", Path: "/metrics/value", Description: "Metricas de valor de negocio derivadas", ExampleBody: "", Protected: false},
 		{Method: "GET", Path: "/metrics/traces/features", Description: "Trazas agregadas por feature con breakdown de etapas", ExampleBody: "", Protected: false},
@@ -601,6 +602,7 @@ func (s *Server) setupRoutes() {
 	mux.HandleFunc("GET /health", healthHandler.Liveness)
 	mux.HandleFunc("GET /health/liveness", healthHandler.Liveness)
 	mux.HandleFunc("GET /health/readiness", healthHandler.Readiness)
+	mux.HandleFunc("GET /health/readiness/{name}", healthHandler.Backend)
 	mux.HandleFunc("GET /metrics", metricsHandler.Handle)
 	mux.HandleFunc("GET /metrics/value", metricsHandler.Value)
 	mux.HandleFunc("GET /metrics/traces/features", metricsHandler.TraceFeatures)

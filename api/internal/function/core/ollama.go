@@ -94,6 +94,13 @@ func NewOllamaService(cfg *config.Config, logger *slog.Logger, embeddingCache ca
 	return s
 }
 
+func (s *OllamaService) ChatModelName() string {
+	if s.chatModel != "" {
+		return s.chatModel
+	}
+	return "phi3:latest"
+}
+
 func (s *OllamaService) SetPoolObserver(observer interface {
 	RegisterPool(name string, capacity int)
 	ObservePoolAcquire(name string, waited bool)
@@ -462,7 +469,7 @@ func (s *OllamaService) effectiveModel(requested string, forFIM bool) string {
 		}
 	}
 	if model == "" {
-		model = "gemma:2b"
+		model = "phi3:latest"
 	}
 	if !s.autoQuantize {
 		return model

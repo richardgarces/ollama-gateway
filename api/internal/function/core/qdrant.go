@@ -88,6 +88,23 @@ func (q *QdrantService) UpsertPoint(collection string, id string, vector []float
 			return postErr
 		}
 		defer resp.Body.Close()
+		if resp.StatusCode == http.StatusNotFound {
+			// Collection missing — try to auto-create it.
+			resp.Body.Close()
+			if createErr := q.ensureCollection(collection, len(vector)); createErr != nil {
+				return createErr
+			}
+			// Retry the upsert after collection creation.
+			retryResp, retryErr := q.client.Post(url, "application/json", bytes.NewBuffer(data))
+			if retryErr != nil {
+				return retryErr
+			}
+			defer retryResp.Body.Close()
+			if retryResp.StatusCode >= 300 {
+				return fmt.Errorf("qdrant upsert retry failed status %d", retryResp.StatusCode)
+			}
+			return nil
+		}
 		if resp.StatusCode >= 300 {
 			return fmt.Errorf("qdrant upsert failed status %d", resp.StatusCode)
 		}
@@ -121,12 +138,18 @@ func (q *QdrantService) Search(collection string, vector []float64, limit int) (
 		return nil, err
 	}
 	var result map[string]interface{}
+	var notFound bool
 	err = q.withBreaker(context.Background(), func(ctx context.Context) error {
 		resp, postErr := q.client.Post(url, "application/json", bytes.NewBuffer(data))
 		if postErr != nil {
 			return postErr
 		}
 		defer resp.Body.Close()
+		if resp.StatusCode == http.StatusNotFound {
+			// Collection does not exist — not a service failure.
+			notFound = true
+			return nil
+		}
 		if resp.StatusCode >= 300 {
 			return fmt.Errorf("qdrant search failed status %d", resp.StatusCode)
 		}
@@ -135,6 +158,10 @@ func (q *QdrantService) Search(collection string, vector []float64, limit int) (
 		}
 		return nil
 	})
+	if notFound {
+		q.logger.Debug("qdrant collection no existe, sin resultados", slog.String("collection", collection))
+		return map[string]interface{}{"result": []interface{}{}}, nil
+	}
 	if err != nil {
 		if q.local != nil {
 			q.logger.Warn("qdrant search falló, usando vector store local", slog.String("service", "qdrant"), slog.Any("error", err))
@@ -143,6 +170,36 @@ func (q *QdrantService) Search(collection string, vector []float64, limit int) (
 		return nil, err
 	}
 	return result, nil
+}
+
+// ensureCollection creates a Qdrant collection if it does not already exist.
+func (q *QdrantService) ensureCollection(collection string, vectorSize int) error {
+	url := fmt.Sprintf("%s/collections/%s", q.baseURL, collection)
+	body := map[string]interface{}{
+		"vectors": map[string]interface{}{
+			"size":     vectorSize,
+			"distance": "Cosine",
+		},
+	}
+	data, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest(http.MethodPut, url, bytes.NewBuffer(data))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := q.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("qdrant create collection %q failed status %d", collection, resp.StatusCode)
+	}
+	q.logger.Info("qdrant: colección creada automáticamente", slog.String("collection", collection), slog.Int("vector_size", vectorSize))
+	return nil
 }
 
 func (q *QdrantService) CircuitBreakerState() resilience.Snapshot {

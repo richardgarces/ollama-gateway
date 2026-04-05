@@ -32,19 +32,21 @@ type Config struct {
 	VectorStorePath        string
 	VectorStorePreferLocal bool
 	// IndexerStatePath: path to persist indexer state (file)
-	IndexerStatePath   string
-	RateLimitRPM       int
-	RateLimitUserRPM   int
-	RateLimitEndpoints map[string]int
-	HTTPTimeoutSeconds int
-	HTTPMaxRetries     int
-	AgentToolsDir      string
-	MongoURI           string
-	RemoteAPIURL       string
-	RemoteAPIKey       string
-	PromptLang         string
-	CacheBackend       string
-	RedisURL           string
+	IndexerStatePath      string
+	RateLimitRPM          int
+	RateLimitUserRPM      int
+	RateLimitEndpoints    map[string]int
+	HTTPTimeoutSeconds    int
+	HTTPMaxRetries        int
+	AgentToolsDir         string
+	MongoURI              string
+	RemoteAPIURL          string
+	RemoteAPIKey          string
+	PromptLang            string
+	CacheBackend          string
+	RedisURL              string
+	HealthCheckTimeoutMS  int
+	HealthExtraChecksJSON string
 	// Embedding cache settings
 	EmbeddingCacheTTLSeconds int
 	EmbeddingCacheMaxEntries int
@@ -131,6 +133,8 @@ func loadFromEnv() *Config {
 		PromptLang:               getEnv("PROMPT_LANG", "en"),
 		CacheBackend:             getEnv("CACHE_BACKEND", "memory"),
 		RedisURL:                 getEnv("REDIS_URL", "redis://localhost:6379/0"),
+		HealthCheckTimeoutMS:     getEnvAsInt("HEALTH_CHECK_TIMEOUT_MS", 2000),
+		HealthExtraChecksJSON:    getEnv("HEALTH_EXTRA_CHECKS_JSON", ""),
 		EmbeddingCacheTTLSeconds: getEnvAsInt("EMBEDDING_CACHE_TTL_SECONDS", 3600),
 		EmbeddingCacheMaxEntries: getEnvAsInt("EMBEDDING_CACHE_MAX_ENTRIES", 1000),
 		RAGCacheTTLSeconds:       getEnvAsInt("RAG_CACHE_TTL_SECONDS", 1800),

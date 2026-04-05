@@ -13,8 +13,8 @@ import (
 	"ollama-gateway/internal/config"
 	agenttransport "ollama-gateway/internal/function/agent/transport"
 	chattransport "ollama-gateway/internal/function/chat/transport"
-	"ollama-gateway/internal/function/core/domain"
 	coreservice "ollama-gateway/internal/function/core"
+	"ollama-gateway/internal/function/core/domain"
 	generatetransport "ollama-gateway/internal/function/generate/transport"
 	healthtransport "ollama-gateway/internal/function/health/transport"
 	openaitransport "ollama-gateway/internal/function/openai/transport"
@@ -139,23 +139,23 @@ func TestChatHandlerEmptyMessages(t *testing.T) {
 
 func TestSelectModelCode(t *testing.T) {
 	m := coreservice.NewRouterService(nil, nil, slog.Default()).SelectModel("implement a func to parse JSON")
-	if m != "deepseek-coder:6.7b" {
-		t.Errorf("expected deepseek-coder, got %s", m)
+	if m != "phi3:latest" {
+		t.Errorf("expected phi3:latest, got %s", m)
 	}
 }
 
 func TestSelectModelLong(t *testing.T) {
 	longPrompt := string(make([]byte, 400))
 	m := coreservice.NewRouterService(nil, nil, slog.Default()).SelectModel(longPrompt)
-	if m != "qwen2.5:7b" {
-		t.Errorf("expected qwen2.5:7b, got %s", m)
+	if m != "phi3:latest" {
+		t.Errorf("expected phi3:latest, got %s", m)
 	}
 }
 
 func TestSelectModelDefault(t *testing.T) {
 	m := coreservice.NewRouterService(nil, nil, slog.Default()).SelectModel("hola")
-	if m != "gemma:2b" {
-		t.Errorf("expected gemma:2b, got %s", m)
+	if m != "phi3:latest" {
+		t.Errorf("expected phi3:latest, got %s", m)
 	}
 }
 

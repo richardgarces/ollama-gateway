@@ -474,7 +474,7 @@ func (s *RAGService) GenerateWithContext(prompt string) (string, error) {
 	var out string
 	var err error
 	if s.routerService == nil {
-		out, err = s.ollamaService.Generate("gemma:2b", fullPrompt)
+		out, err = s.ollamaService.Generate(s.ollamaService.ChatModelName(), fullPrompt)
 	} else {
 		out, err = s.routerService.GenerateWithFallback(prompt, fullPrompt)
 	}
@@ -548,7 +548,7 @@ func (s *RAGService) StreamGenerateWithContext(prompt string, onChunk func(strin
 	}
 	var err error
 	if s.routerService == nil {
-		err = s.ollamaService.StreamGenerate("gemma:2b", fullPrompt, writeChunk)
+		err = s.ollamaService.StreamGenerate(s.ollamaService.ChatModelName(), fullPrompt, writeChunk)
 	} else {
 		err = s.routerService.StreamGenerateWithFallback(prompt, fullPrompt, writeChunk)
 	}

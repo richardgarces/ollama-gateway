@@ -25,6 +25,7 @@ type RouterService struct {
 	modelHintProvider ModelHintProvider
 	remoteAPIURL      string
 	remoteAPIKey      string
+	defaultChatModel  string
 	httpClient        *http.Client
 	categorySamples   map[string]string
 	categoryModels    map[string]string
@@ -47,16 +48,21 @@ func NewRouterService(cfg *config.Config, ollamaService *OllamaService, logger *
 
 	remoteURL := ""
 	remoteKey := ""
+	chatModel := "phi3:latest"
 	if cfg != nil {
 		remoteURL = strings.TrimSpace(cfg.RemoteAPIURL)
 		remoteKey = strings.TrimSpace(cfg.RemoteAPIKey)
+		if m := strings.TrimSpace(cfg.ChatModel); m != "" {
+			chatModel = m
+		}
 	}
 
 	return &RouterService{
-		logger:        logger,
-		ollamaService: ollamaService,
-		remoteAPIURL:  remoteURL,
-		remoteAPIKey:  remoteKey,
+		logger:           logger,
+		ollamaService:    ollamaService,
+		remoteAPIURL:     remoteURL,
+		remoteAPIKey:     remoteKey,
+		defaultChatModel: chatModel,
 		httpClient: &http.Client{
 			Timeout: 20 * time.Second,
 		},
@@ -67,10 +73,10 @@ func NewRouterService(cfg *config.Config, ollamaService *OllamaService, logger *
 			"chat":     "casual conversation, Q&A, simple assistant response",
 		},
 		categoryModels: map[string]string{
-			"code":     "deepseek-coder:6.7b",
-			"creative": "qwen2.5:7b",
-			"analysis": "qwen2.5:7b",
-			"chat":     "gemma:2b",
+			"code":     chatModel,
+			"creative": chatModel,
+			"analysis": chatModel,
+			"chat":     chatModel,
 		},
 		categoryVectors: make(map[string][]float64),
 	}
@@ -218,7 +224,7 @@ func (s *RouterService) selectModelWithCategory(prompt string) (string, string, 
 
 	model := s.categoryModels[bestCategory]
 	if model == "" {
-		model = "gemma:2b"
+		model = s.defaultChatModel
 	}
 	if s.modelHintProvider != nil {
 		if hinted, err := s.modelHintProvider.RecommendHintForPrompt(context.Background(), prompt, bestCategory); err == nil {
@@ -260,14 +266,14 @@ func (s *RouterService) ensureCategoryEmbeddings() error {
 
 func (s *RouterService) fallbackByLength(prompt string) (model string, category string) {
 	if len(prompt) > 300 {
-		return "qwen2.5:7b", "analysis"
+		return s.defaultChatModel, "analysis"
 	}
 
 	lower := strings.ToLower(prompt)
 	if strings.Contains(lower, "func") || strings.Contains(lower, "refactor") || strings.Contains(lower, "golang") {
-		return "deepseek-coder:6.7b", "code"
+		return s.defaultChatModel, "code"
 	}
-	return "gemma:2b", "chat"
+	return s.defaultChatModel, "chat"
 }
 
 func (s *RouterService) generateRemote(prompt string) (string, error) {

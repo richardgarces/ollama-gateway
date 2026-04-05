@@ -39,8 +39,8 @@ func NewService(logger *slog.Logger) *Service {
 	return &Service{
 		logger: logger,
 		profiles: []ModelProfile{
-			{Name: "gemma:2b", LatencyMS: 900, MaxTokens: 2048, BaseQuality: 0.56, CostPer1K: 0.2},
-			{Name: "deepseek-coder:6.7b", LatencyMS: 1800, MaxTokens: 4096, BaseQuality: 0.82, CostPer1K: 0.6},
+			{Name: "phi3:latest", LatencyMS: 900, MaxTokens: 4096, BaseQuality: 0.72, CostPer1K: 0.3},
+			{Name: "qwen2.5-coder:7b", LatencyMS: 1800, MaxTokens: 4096, BaseQuality: 0.82, CostPer1K: 0.6},
 			{Name: "qwen2.5:7b", LatencyMS: 2100, MaxTokens: 8192, BaseQuality: 0.85, CostPer1K: 0.7},
 		},
 	}
@@ -63,7 +63,7 @@ func (s *Service) Recommend(taskType string, slaLatencyMS, tokenBudget int) Reco
 	}
 
 	qualityWeight, speedWeight, costWeight := taskWeights(task)
-	best := Recommendation{Model: "gemma:2b", Score: -1}
+	best := Recommendation{Model: "phi3:latest", Score: -1}
 
 	for _, p := range s.profiles {
 		tokenFit := tokenFitScore(p.MaxTokens, tokenBudget)
