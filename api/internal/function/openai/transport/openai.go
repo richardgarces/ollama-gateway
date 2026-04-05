@@ -159,10 +159,10 @@ func (h *OpenAIHandler) ChatCompletions(w http.ResponseWriter, r *http.Request) 
 	if selectedSystemPrompt != "" && !hasSystemMessage(runtimeMessages) {
 		runtimeMessages = append([]domain.Message{{Role: "system", Content: selectedSystemPrompt}}, runtimeMessages...)
 	}
+	if req.Lang != "" && !hasSystemMessage(runtimeMessages) {
+		runtimeMessages = append([]domain.Message{{Role: "system", Content: "Respond in language: " + req.Lang}}, runtimeMessages...)
+	}
 
-	prompt := joinMessages(runtimeMessages)
-	prompt = withLangDirective(prompt, req.Lang)
-	routedPrompt := withRequestIDPrompt(r, prompt)
 	model := req.Model
 	if model == "" {
 		model = "local-rag"
@@ -188,7 +188,7 @@ func (h *OpenAIHandler) ChatCompletions(w http.ResponseWriter, r *http.Request) 
 		}); err != nil {
 			return
 		}
-		if err := h.rag.StreamGenerateWithContext(routedPrompt, func(chunk string) error {
+		streamChunk := func(chunk string) error {
 			assistantContent.WriteString(chunk)
 			return httputil.WriteSSEData(w, map[string]interface{}{
 				"id":      id,
@@ -200,7 +200,9 @@ func (h *OpenAIHandler) ChatCompletions(w http.ResponseWriter, r *http.Request) 
 					"delta": map[string]string{"content": chunk},
 				}},
 			})
-		}); err != nil {
+		}
+		// Use Ollama /api/chat with structured messages for better quality.
+		if err := h.ollama.StreamChat(model, runtimeMessages, streamChunk); err != nil {
 			return
 		}
 
@@ -229,11 +231,16 @@ func (h *OpenAIHandler) ChatCompletions(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	out, err := h.rag.GenerateWithContext(routedPrompt)
-	if err != nil {
+	// Non-streaming: use /api/chat with structured messages.
+	var outBuilder strings.Builder
+	if err := h.ollama.StreamChat(model, runtimeMessages, func(chunk string) error {
+		outBuilder.WriteString(chunk)
+		return nil
+	}); err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	out := outBuilder.String()
 
 	conversationID, err := h.persistConversationTurn(r.Context(), userID, req.ConversationID, req.Messages, out)
 	if err != nil {

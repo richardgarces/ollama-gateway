@@ -310,7 +310,59 @@ func (s *OllamaService) StreamGenerate(model, prompt string, onChunk func(string
 	})
 }
 
-// (no local buffer helpers; using bytes.NewBuffer and standard io)
+func (s *OllamaService) StreamChat(model string, messages []domain.Message, onChunk func(string) error) error {
+	if err := s.ensureAvailable(); err != nil {
+		return err
+	}
+	model = s.effectiveModel(model, true)
+	reqBody := domain.OllamaChatRequest{
+		Model:     model,
+		Messages:  messages,
+		Stream:    true,
+		KeepAlive: s.keepAlive,
+	}
+
+	data, err := json.Marshal(reqBody)
+	if err != nil {
+		return err
+	}
+
+	return s.withBreaker(context.Background(), func(ctx context.Context) error {
+		resp, postErr := s.client.Post(s.baseURL+"/api/chat", "application/json", bytes.NewBuffer(data))
+		if postErr != nil {
+			return fmt.Errorf("Ollama is not available. Check that the service is running.")
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("ollama returned status %d", resp.StatusCode)
+		}
+
+		decoder := json.NewDecoder(resp.Body)
+		for {
+			var chunk struct {
+				Message struct {
+					Content string `json:"content"`
+				} `json:"message"`
+				Done bool `json:"done"`
+			}
+			if decodeErr := decoder.Decode(&chunk); decodeErr != nil {
+				if decodeErr == io.EOF {
+					return nil
+				}
+				return fmt.Errorf("ollama chat streaming decode error: %w", decodeErr)
+			}
+			if chunk.Message.Content != "" {
+				if streamErr := onChunk(chunk.Message.Content); streamErr != nil {
+					return streamErr
+				}
+			}
+			if chunk.Done {
+				return nil
+			}
+		}
+	})
+}
 
 func (s *OllamaService) GetEmbedding(model, text string) ([]float64, error) {
 	ctx, span := otel.Tracer("ollama-gateway/service/ollama").Start(context.Background(), "OllamaService.GetEmbedding")

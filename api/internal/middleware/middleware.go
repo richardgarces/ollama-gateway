@@ -18,6 +18,12 @@ func (r *statusRecorder) WriteHeader(code int) {
 	r.ResponseWriter.WriteHeader(code)
 }
 
+func (r *statusRecorder) Flush() {
+	if flusher, ok := r.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
 func Logging(next http.Handler) http.Handler {
 	return LoggingWithStream(nil)(next)
 }

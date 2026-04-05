@@ -84,6 +84,13 @@ type OllamaRequest struct {
 	KeepAlive string `json:"keep_alive,omitempty"`
 }
 
+type OllamaChatRequest struct {
+	Model     string    `json:"model"`
+	Messages  []Message `json:"messages"`
+	Stream    bool      `json:"stream"`
+	KeepAlive string    `json:"keep_alive,omitempty"`
+}
+
 type OllamaResponse struct {
 	Response string `json:"response"`
 }

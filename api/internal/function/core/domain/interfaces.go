@@ -8,6 +8,7 @@ import (
 type OllamaClient interface {
 	Generate(model, prompt string) (string, error)
 	StreamGenerate(model, prompt string, onChunk func(string) error) error
+	StreamChat(model string, messages []Message, onChunk func(string) error) error
 	GetEmbedding(model, text string) ([]float64, error)
 }
 
