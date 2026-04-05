@@ -1,22 +1,8 @@
 # Mejoras Técnicas Potenciales
 
 > Cada sección incluye un **prompt listo para Copilot** para implementación técnica incremental.
-
----
-
-## 4. Retries con Backoff y Jitter
-
-Uniformar estrategia de reintentos en llamadas externas.
-
-```
-Prompt Copilot:
-Implementa retry policy reusable:
-1. Crea internal/function/resilience/retry.go.
-2. Expon función Do(ctx, op, policy) con exponential backoff + jitter.
-3. Clasifica errores retriables/no retriables.
-4. Reemplaza retries ad-hoc en servicios externos.
-5. Incluye tests de timing y límites de intentos.
-```
+>
+> Estado: este documento conserva solo mejoras técnicas pendientes. Las ya implementadas fueron removidas.
 
 ---
 

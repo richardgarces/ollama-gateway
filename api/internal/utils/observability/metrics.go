@@ -12,6 +12,9 @@ type RouteMetric struct {
 	Requests       int64   `json:"requests"`
 	Errors         int64   `json:"errors"`
 	AverageLatency float64 `json:"average_latency_ms"`
+	P50Latency     float64 `json:"p50_latency_ms"`
+	P95Latency     float64 `json:"p95_latency_ms"`
+	P99Latency     float64 `json:"p99_latency_ms"`
 }
 
 type MetricsSnapshot struct {
@@ -37,7 +40,12 @@ type routeStats struct {
 	requests      int64
 	errors        int64
 	totalDuration time.Duration
+	samplesMS     [maxRouteLatencySamples]int64
+	samplesCount  int
+	sampleIndex   int
 }
+
+const maxRouteLatencySamples = 256
 
 type MetricsCollector struct {
 	mu           sync.RWMutex
@@ -114,6 +122,15 @@ func (c *MetricsCollector) Observe(method, path string, status int, duration tim
 
 	stats.requests++
 	stats.totalDuration += duration
+	latencyMS := duration.Milliseconds()
+	if latencyMS < 0 {
+		latencyMS = 0
+	}
+	stats.samplesMS[stats.sampleIndex] = latencyMS
+	if stats.samplesCount < maxRouteLatencySamples {
+		stats.samplesCount++
+	}
+	stats.sampleIndex = (stats.sampleIndex + 1) % maxRouteLatencySamples
 	if status >= 400 {
 		stats.errors++
 	}
@@ -146,12 +163,19 @@ func (c *MetricsCollector) Snapshot() MetricsSnapshot {
 		if stats.requests > 0 {
 			avg = float64(stats.totalDuration.Milliseconds()) / float64(stats.requests)
 		}
+		samples := snapshotRouteSamples(stats)
+		p50 := percentile(samples, 50)
+		p95 := percentile(samples, 95)
+		p99 := percentile(samples, 99)
 		routes = append(routes, RouteMetric{
 			Method:         method,
 			Path:           path,
 			Requests:       stats.requests,
 			Errors:         stats.errors,
 			AverageLatency: avg,
+			P50Latency:     p50,
+			P95Latency:     p95,
+			P99Latency:     p99,
 		})
 	}
 
@@ -206,4 +230,38 @@ func splitMetricKey(key string) (string, string) {
 		}
 	}
 	return "", key
+}
+
+func snapshotRouteSamples(stats *routeStats) []float64 {
+	if stats == nil || stats.samplesCount == 0 {
+		return nil
+	}
+	out := make([]float64, 0, stats.samplesCount)
+	for i := 0; i < stats.samplesCount; i++ {
+		out = append(out, float64(stats.samplesMS[i]))
+	}
+	return out
+}
+
+func percentile(samples []float64, p int) float64 {
+	if len(samples) == 0 {
+		return 0
+	}
+	if p <= 0 {
+		p = 0
+	}
+	if p >= 100 {
+		p = 100
+	}
+	sorted := make([]float64, len(samples))
+	copy(sorted, samples)
+	sort.Float64s(sorted)
+	idx := int((float64(p) / 100.0) * float64(len(sorted)-1))
+	if idx < 0 {
+		idx = 0
+	}
+	if idx >= len(sorted) {
+		idx = len(sorted) - 1
+	}
+	return sorted[idx]
 }

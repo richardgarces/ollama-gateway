@@ -25,6 +25,42 @@ Esto habilita una fase de expansion enfocada en escalabilidad, gobernanza, segur
 - Extensibilidad: capacidades nuevas deben integrarse al modelo actual de services + handlers.
 - Compatibilidad incremental: agregar sin romper APIs existentes.
 
+## 2.1 Estado Validado en el Repo (2026-04-04)
+
+Resumen de verificacion en codigo real:
+
+- Existe: 1
+- Parcial: 11
+- No existe: 2
+
+Detalle por capacidad:
+
+- Multi-tenant real: **Parcial**.
+- Cola de trabajos asincronos con API de jobs: **Parcial**.
+- Modo alta disponibilidad: **Parcial**.
+- RBAC y scopes por endpoint: **No existe**.
+- Secret scanning y policy engine: **Parcial**.
+- Auditoria trazable global: **Parcial**.
+- Refactor guiado por patrones: **Parcial**.
+- Asistente de performance: **Existe**.
+- Test intelligence por diff: **Parcial**.
+- Copilot Local avanzado (4 comandos nuevos): **No existe**.
+- Playbooks por incidente (API + VS Code): **Parcial**.
+- API product externos (versionado + SDK): **Parcial**.
+- Metricas de valor: **Parcial**.
+- Trazas por feature con breakdown completo: **Parcial**.
+
+## 2.2 Delta Prioritario Recomendado
+
+Para alinear roadmap y estado actual, el siguiente paquete entrega el mayor impacto inmediato:
+
+1. RBAC + scopes por endpoint (cubre riesgo operacional critico).
+2. Auditoria global de acciones sensibles (quien, cuando, endpoint, resultado).
+3. Job queue con endpoints de ciclo completo (crear, estado, cancelar, resultado).
+4. Comandos VS Code faltantes: `architectReview` y `securityScanCurrentFile` como primer tramo.
+
+Este delta deja lista la base de gobernanza y operacion para entrar en multi-tenant y policy engine en la siguiente fase.
+
 ---
 
 ## 3. Nuevas Funcionalidades Propuestas

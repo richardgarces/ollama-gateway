@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"ollama-gateway/internal/function/core/domain"
+	"ollama-gateway/internal/function/resilience"
 )
 
 const (
@@ -140,7 +142,24 @@ func (s *Service) executeStep(index int, step Step) StepTimeline {
 	}
 
 	maxAttempts := retryLimit + 1
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
+	attempt := 0
+	policy := resilience.RetryPolicy{
+		MaxAttempts: maxAttempts,
+		BaseBackoff: backoff,
+		MaxBackoff:  backoff * 8,
+		JitterRatio: 0.2,
+		OnRetry: func(currentAttempt int, err error, nextDelay time.Duration) {
+			s.logger.Warn("planner retry",
+				slog.String("step", stepID),
+				slog.Int("attempt", currentAttempt),
+				slog.String("reason", err.Error()),
+				slog.Duration("backoff", nextDelay),
+			)
+		},
+	}
+
+	err := resilience.Do(context.Background(), func(ctx context.Context) error {
+		attempt++
 		runStart := time.Now().UTC()
 		timeline.Status = StepStatusRunning
 		timeline.Attempts = attempt
@@ -170,7 +189,7 @@ func (s *Service) executeStep(index int, step Step) StepTimeline {
 				Message:    "step completado",
 				DurationMS: runDuration,
 			})
-			return timeline
+			return nil
 		}
 
 		errMsg := "ejecución sin salida"
@@ -182,26 +201,17 @@ func (s *Service) executeStep(index int, step Step) StepTimeline {
 			Message:    errMsg,
 			DurationMS: runDuration,
 		})
+		return errors.New(errMsg)
+	}, policy)
 
-		if attempt < maxAttempts {
-			s.logger.Warn("planner retry",
-				slog.String("step", stepID),
-				slog.Int("attempt", attempt),
-				slog.String("reason", errMsg),
-			)
-			time.Sleep(backoff)
-			continue
-		}
-
+	if err != nil {
 		timeline.Status = StepStatusFailed
-		timeline.FinishedAt = runFinished
+		timeline.FinishedAt = time.Now().UTC()
+		if timeline.Error == "" {
+			timeline.Error = err.Error()
+		}
 		return timeline
 	}
 
-	timeline.Status = StepStatusFailed
-	timeline.FinishedAt = time.Now().UTC()
-	if timeline.Error == "" {
-		timeline.Error = "step failed"
-	}
 	return timeline
 }

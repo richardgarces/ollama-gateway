@@ -26,12 +26,16 @@ func TestMetricsCollectorSnapshot(t *testing.T) {
 	m := NewMetricsCollector()
 	m.Observe("GET", "/x", 200, 10*time.Millisecond)
 	m.Observe("GET", "/x", 500, 20*time.Millisecond)
+	m.Observe("GET", "/x", 200, 40*time.Millisecond)
 	s := m.Snapshot()
-	if s.TotalRequests != 2 || len(s.Routes) != 1 {
+	if s.TotalRequests != 3 || len(s.Routes) != 1 {
 		t.Fatalf("unexpected snapshot: %+v", s)
 	}
 	if s.Routes[0].Errors != 1 {
 		t.Fatalf("expected one error in route metrics")
+	}
+	if s.Routes[0].P50Latency <= 0 || s.Routes[0].P95Latency <= 0 || s.Routes[0].P99Latency <= 0 {
+		t.Fatalf("expected percentile latencies > 0, got %+v", s.Routes[0])
 	}
 }
 

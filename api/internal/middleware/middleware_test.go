@@ -114,6 +114,60 @@ func TestAuthMiddlewareJWT(t *testing.T) {
 	}
 }
 
+func TestAuthMiddlewareRoleAndScopes(t *testing.T) {
+	mw := NewAuthMiddleware([]byte("secret"))
+	h := mw.JWT(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if RoleFromContext(r.Context()) != "maintainer" {
+			t.Fatalf("expected maintainer role")
+		}
+		if !HasScope(r.Context(), "security:scan") {
+			t.Fatalf("expected security:scan scope")
+		}
+		if HasScope(r.Context(), "unknown:scope") {
+			t.Fatalf("did not expect unknown scope")
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	token := signedTokenForTest(t, []byte("secret"), map[string]interface{}{
+		"user":   "dev1",
+		"role":   "maintainer",
+		"scopes": []string{"security:scan", "docs:apply"},
+	})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/x", nil)
+	r.Header.Set("Authorization", "Bearer "+token)
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected authorized request")
+	}
+}
+
+func TestRequireScope(t *testing.T) {
+	mw := NewAuthMiddleware([]byte("secret"))
+	h := mw.JWT(RequireScope("patch:apply")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})))
+
+	allowed := signedTokenForTest(t, []byte("secret"), map[string]interface{}{"user": "u1", "role": "admin"})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/patch", nil)
+	r.Header.Set("Authorization", "Bearer "+allowed)
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("expected allowed request, got %d", w.Code)
+	}
+
+	denied := signedTokenForTest(t, []byte("secret"), map[string]interface{}{"user": "u2", "role": "viewer"})
+	w = httptest.NewRecorder()
+	r = httptest.NewRequest(http.MethodPost, "/api/patch", nil)
+	r.Header.Set("Authorization", "Bearer "+denied)
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected forbidden request, got %d", w.Code)
+	}
+}
+
 func TestMetricsAndRateLimit(t *testing.T) {
 	collector := observability.NewMetricsCollector()
 	limiter := observability.NewRateLimiter(1, 100*time.Millisecond)

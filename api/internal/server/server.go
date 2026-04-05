@@ -13,6 +13,8 @@ import (
 	apiexplorertransport "ollama-gateway/internal/function/api_explorer/transport"
 	architectservice "ollama-gateway/internal/function/architect"
 	architecttransport "ollama-gateway/internal/function/architect/transport"
+	auditservice "ollama-gateway/internal/function/audit"
+	audittransport "ollama-gateway/internal/function/audit/transport"
 	authtransport "ollama-gateway/internal/function/auth/transport"
 	ragcacheservice "ollama-gateway/internal/function/cache"
 	chattransport "ollama-gateway/internal/function/chat/transport"
@@ -36,33 +38,49 @@ import (
 	eventservice "ollama-gateway/internal/function/events"
 	feedbackservice "ollama-gateway/internal/function/feedback"
 	feedbacktransport "ollama-gateway/internal/function/feedback/transport"
+	flagsservice "ollama-gateway/internal/function/flags"
+	flagstransport "ollama-gateway/internal/function/flags/transport"
+	gateservice "ollama-gateway/internal/function/gate"
+	gatetransport "ollama-gateway/internal/function/gate/transport"
 	generatetransport "ollama-gateway/internal/function/generate/transport"
 	guardrailsservice "ollama-gateway/internal/function/guardrails"
 	guardrailstransport "ollama-gateway/internal/function/guardrails/transport"
 	healthtransport "ollama-gateway/internal/function/health/transport"
 	indexerservice "ollama-gateway/internal/function/indexer"
 	indexertransport "ollama-gateway/internal/function/indexer/transport"
+	jobsservice "ollama-gateway/internal/function/jobs"
+	jobstransport "ollama-gateway/internal/function/jobs/transport"
 	memoryservice "ollama-gateway/internal/function/memory"
 	memorytransport "ollama-gateway/internal/function/memory/transport"
 	metricstransport "ollama-gateway/internal/function/metrics/transport"
 	modelrecommenderservice "ollama-gateway/internal/function/model_recommender"
 	modelrecommendertransport "ollama-gateway/internal/function/model_recommender/transport"
 	modelstransport "ollama-gateway/internal/function/models/transport"
+	onboardingservice "ollama-gateway/internal/function/onboarding"
+	onboardingtransport "ollama-gateway/internal/function/onboarding/transport"
 	openaitransport "ollama-gateway/internal/function/openai/transport"
 	outboxservice "ollama-gateway/internal/function/outbox"
 	outboxtransport "ollama-gateway/internal/function/outbox/transport"
 	patchservice "ollama-gateway/internal/function/patch"
 	patchtransport "ollama-gateway/internal/function/patch/transport"
+	perfservice "ollama-gateway/internal/function/perf"
+	perftransport "ollama-gateway/internal/function/perf/transport"
 	plannerservice "ollama-gateway/internal/function/planner"
 	plannertransport "ollama-gateway/internal/function/planner/transport"
+	postmortemservice "ollama-gateway/internal/function/postmortem"
+	postmortemtransport "ollama-gateway/internal/function/postmortem/transport"
 	profileservice "ollama-gateway/internal/function/profile"
 	profiletransport "ollama-gateway/internal/function/profile/transport"
+	prsummaryservice "ollama-gateway/internal/function/prsummary"
+	prsummarytransport "ollama-gateway/internal/function/prsummary/transport"
 	releaseservice "ollama-gateway/internal/function/release"
 	releasetransport "ollama-gateway/internal/function/release/transport"
 	reposervice "ollama-gateway/internal/function/repo"
 	repotransport "ollama-gateway/internal/function/repo/transport"
 	reviewservice "ollama-gateway/internal/function/review"
 	reviewtransport "ollama-gateway/internal/function/review/transport"
+	runbookservice "ollama-gateway/internal/function/runbook"
+	runbooktransport "ollama-gateway/internal/function/runbook/transport"
 	runtimeconfigservice "ollama-gateway/internal/function/runtime_config"
 	runtimeconfigtransport "ollama-gateway/internal/function/runtime_config/transport"
 	sandboxservice "ollama-gateway/internal/function/sandbox"
@@ -74,6 +92,8 @@ import (
 	sessiontransport "ollama-gateway/internal/function/session/transport"
 	sqlgenservice "ollama-gateway/internal/function/sqlgen"
 	sqlgentransport "ollama-gateway/internal/function/sqlgen/transport"
+	sqlreviewservice "ollama-gateway/internal/function/sqlreview"
+	sqlreviewtransport "ollama-gateway/internal/function/sqlreview/transport"
 	techdebtservice "ollama-gateway/internal/function/techdebt"
 	techdebttransport "ollama-gateway/internal/function/techdebt/transport"
 	testgenservice "ollama-gateway/internal/function/testgen"
@@ -98,7 +118,9 @@ type Server struct {
 	conversationService *coreservice.ConversationService
 	profileService      *profileservice.Service
 	feedbackService     *feedbackservice.Service
+	flagsService        *flagsservice.Service
 	outboxService       *outboxservice.Service
+	jobsService         *jobsservice.Service
 	eventBus            *eventservice.Bus
 	eventCancel         context.CancelFunc
 }
@@ -140,6 +162,13 @@ func GetRouteDefinitions() []RouteDefinition {
 		{Method: "POST", Path: "/api/v2/generate", Description: "Generacion simple (v2, acepta aliases query/input)", ExampleBody: "{\n  \"prompt\": \"Resume este texto\",\n  \"stream\": false\n}", Protected: true},
 		{Method: "POST", Path: "/api/agent", Description: "Ejecucion de agente", ExampleBody: "{\n  \"input\": \"Analiza el repo\"\n}", Protected: true},
 		{Method: "POST", Path: "/api/agent/plan", Description: "Ejecutar plan multi-step para agente", ExampleBody: "{\n  \"steps\": [\n    {\"id\":\"step-1\",\"input\":\"analiza error\",\"retry_limit\":2,\"backoff_ms\":400},\n    {\"id\":\"step-2\",\"input\":\"sugiere fix\"}\n  ]\n}", Protected: true},
+		{Method: "POST", Path: "/api/flags", Description: "Crear feature flag", ExampleBody: "{\n  \"tenant\": \"default\",\n  \"feature\": \"postmortem\",\n  \"enabled\": true,\n  \"rollout_percentage\": 100\n}", Protected: true},
+		{Method: "GET", Path: "/api/flags", Description: "Listar feature flags", ExampleBody: "", Protected: true},
+		{Method: "GET", Path: "/api/flags/{feature}", Description: "Obtener feature flag por feature", ExampleBody: "", Protected: true},
+		{Method: "PUT", Path: "/api/flags/{feature}", Description: "Actualizar feature flag", ExampleBody: "{\n  \"tenant\": \"default\",\n  \"enabled\": false,\n  \"rollout_percentage\": 0\n}", Protected: true},
+		{Method: "DELETE", Path: "/api/flags/{feature}", Description: "Eliminar feature flag", ExampleBody: "", Protected: true},
+		{Method: "POST", Path: "/api/postmortem/analyze", Description: "Analizar incidente y generar reporte postmortem", ExampleBody: "{\n  \"logs\": \"ERROR timeout contacting qdrant\",\n  \"start_time\": \"2026-04-04T10:00:00Z\",\n  \"end_time\": \"2026-04-04T10:10:00Z\",\n  \"commit_hash\": \"abc123def456\",\n  \"metrics\": {\"latency_ms\": 1832, \"error_rate\": 0.17}\n}", Protected: true},
+		{Method: "POST", Path: "/api/runbooks/generate", Description: "Generar runbook operativo desde tipo de incidente y contexto", ExampleBody: "{\n  \"incident_type\": \"db-lock-timeout\",\n  \"context\": \"timeouts despues de migracion\",\n  \"apply\": false\n}", Protected: true},
 		{Method: "POST", Path: "/api/refactor", Description: "Refactor de archivo", ExampleBody: "{\n  \"path\": \"api/internal/server/server.go\",\n  \"prompt\": \"extrae helper\"\n}", Protected: true},
 		{Method: "GET", Path: "/api/analyze-repo", Description: "Analisis de repositorio", ExampleBody: "", Protected: true},
 		{Method: "POST", Path: "/api/review/diff", Description: "Code review de diff", ExampleBody: "{\n  \"diff\": \"diff --git ...\"\n}", Protected: true},
@@ -155,11 +184,21 @@ func GetRouteDefinitions() []RouteDefinition {
 		{Method: "POST", Path: "/api/sql/query", Description: "Generar query SQL", ExampleBody: "{\n  \"description\": \"listar usuarios activos\",\n  \"dialect\": \"postgres\"\n}", Protected: true},
 		{Method: "POST", Path: "/api/sql/migration", Description: "Generar migracion SQL", ExampleBody: "{\n  \"description\": \"crear tabla sessions\",\n  \"dialect\": \"postgres\"\n}", Protected: true},
 		{Method: "POST", Path: "/api/sql/explain", Description: "Explicar query SQL", ExampleBody: "{\n  \"sql\": \"SELECT * FROM users WHERE id = 1\"\n}", Protected: true},
+		{Method: "POST", Path: "/api/sql/review", Description: "Revisar riesgo de migracion SQL", ExampleBody: "{\n  \"sql\": \"ALTER TABLE users ADD COLUMN status text\",\n  \"dialect\": \"postgres\"\n}", Protected: true},
+		{Method: "GET", Path: "/api/perf/endpoints", Description: "Analizar ranking de endpoints criticos por latencia y error rate", ExampleBody: "", Protected: true},
+		{Method: "GET", Path: "/api/gate/deploy", Description: "Validar gate pre-deploy con seguridad, cobertura y estado de tests", ExampleBody: "", Protected: true},
+		{Method: "POST", Path: "/api/onboarding/guide", Description: "Generar guia de onboarding por rol y exportarla opcionalmente", ExampleBody: "{\n  \"role\": \"backend\",\n  \"apply\": false\n}", Protected: true},
+		{Method: "POST", Path: "/api/pr/summary", Description: "Generar resumen ejecutivo de PR a partir de diff", ExampleBody: "{\n  \"diff\": \"diff --git ...\"\n}", Protected: true},
 		{Method: "POST", Path: "/api/cicd/generate", Description: "Generar pipeline CI/CD", ExampleBody: "{\n  \"platform\": \"github-actions\",\n  \"apply\": false\n}", Protected: true},
 		{Method: "POST", Path: "/api/cicd/optimize", Description: "Optimizar pipeline CI/CD", ExampleBody: "{\n  \"platform\": \"gitlab-ci\",\n  \"pipeline\": \"stages: [test]\"\n}", Protected: true},
 		{Method: "POST", Path: "/api/commit/message", Description: "Generar commit message desde diff", ExampleBody: "{\n  \"diff\": \"diff --git ...\"\n}", Protected: true},
 		{Method: "POST", Path: "/api/commit/staged", Description: "Generar commit message desde staged", ExampleBody: "{\n  \"repo_root\": \".\"\n}", Protected: true},
 		{Method: "POST", Path: "/api/release/notes", Description: "Generar release notes entre dos referencias git", ExampleBody: "{\n  \"fromRef\": \"v1.0.0\",\n  \"toRef\": \"v1.1.0\",\n  \"apply\": false\n}", Protected: true},
+		{Method: "GET", Path: "/api/audit/events", Description: "Consultar eventos de auditoria (JSON/CSV)", ExampleBody: "", Protected: true},
+		{Method: "POST", Path: "/api/jobs", Description: "Crear job asíncrono (security.scan_repo, docs.readme, architect.analyze, indexer.reindex)", ExampleBody: "{\n  \"type\": \"security.scan_repo\",\n  \"params\": {}\n}", Protected: true},
+		{Method: "GET", Path: "/api/jobs/{id}", Description: "Consultar estado de job", ExampleBody: "", Protected: true},
+		{Method: "POST", Path: "/api/jobs/{id}/cancel", Description: "Cancelar job pendiente o en ejecución", ExampleBody: "{}", Protected: true},
+		{Method: "GET", Path: "/api/jobs/{id}/result", Description: "Obtener resultado final de job", ExampleBody: "", Protected: true},
 		{Method: "GET", Path: "/api/architect/analyze", Description: "Analisis de arquitectura", ExampleBody: "", Protected: true},
 		{Method: "POST", Path: "/api/architect/refactor", Description: "Sugerencia de refactor", ExampleBody: "{\n  \"path\": \"api/internal/function/core/router.go\"\n}", Protected: true},
 		{Method: "POST", Path: "/api/sessions", Description: "Crear sesion compartida", ExampleBody: "{}", Protected: true},
@@ -285,6 +324,19 @@ func (s *Server) setupRoutes() {
 		s.outboxService = outboxSvc
 		outboxSvc.Start(context.Background())
 	}
+	flagsSvc, err := flagsservice.NewServiceWithPool(
+		s.cfg.MongoURI,
+		s.cfg.MongoPoolMaxOpen,
+		s.cfg.MongoPoolMaxIdle,
+		s.cfg.MongoPoolTimeoutSeconds,
+		30*time.Second,
+		logger,
+	)
+	if err != nil {
+		logger.Warn("flags service no disponible; feature flags deshabilitadas", slog.String("error", err.Error()))
+	} else {
+		s.flagsService = flagsSvc
+	}
 	modelRecommenderService := modelrecommenderservice.NewService(logger)
 	if feedbackService != nil {
 		modelRecommenderService.SetFeedbackProvider(feedbackService)
@@ -356,11 +408,17 @@ func (s *Server) setupRoutes() {
 	translatorService := translatorservice.NewService(ragService, s.cfg.RepoRoot, logger)
 	testGenService := testgenservice.NewService(ragService, s.cfg.RepoRoot, logger)
 	sqlGenService := sqlgenservice.NewService(ragService, s.cfg.RepoRoot, logger)
+	sqlReviewService := sqlreviewservice.NewService(logger)
+	perfService := perfservice.NewService(metricsCollector)
 	cicdService := cicdservice.NewService(ragService, s.cfg.RepoRoot, logger)
 	commitGenService := commitgenservice.NewService(ragService, s.cfg.RepoRoot, logger)
 	releaseService := releaseservice.NewService(s.cfg.RepoRoot)
+	runbookService := runbookservice.NewService(s.cfg.RepoRoot, logger)
+	onboardingService := onboardingservice.NewService(s.cfg.RepoRoot, logger)
+	prSummaryService := prsummaryservice.NewService(logger)
 	sessionService := sessionservice.NewService(eventBus)
 	securityService := securityservice.NewService(ragService, s.cfg.RepoRoot, logger)
+	gateService := gateservice.NewService(s.cfg.RepoRoot, securityService, logger)
 	techDebtService := techdebtservice.NewService(s.cfg.RepoRoot, logger)
 	indexerService, _ := indexerservice.NewService(repoRoots, s.cfg.IndexerStatePath, ollamaService, qdrantService, logger)
 	indexerService.SetEventPublisher(eventBus)
@@ -415,7 +473,18 @@ func (s *Server) setupRoutes() {
 		)
 	})
 	architectService := architectservice.NewService(ragService, s.cfg.RepoRoot, indexerService, logger)
+	jobsService := jobsservice.NewService(jobsservice.Dependencies{
+		Security:  securityService,
+		DocGen:    docGenService,
+		Architect: architectService,
+		Indexer:   indexerService,
+		Logger:    logger,
+		Workers:   3,
+		QueueSize: 256,
+	})
+	s.jobsService = jobsService
 	plannerService := plannerservice.NewService(agentService, logger)
+	postmortemService := postmortemservice.NewService(logger)
 
 	var ollamaClient domain.OllamaClient = ollamaService
 	var vectorStore domain.VectorStore = qdrantService
@@ -430,6 +499,8 @@ func (s *Server) setupRoutes() {
 	generateHandler.SetEventPublisher(eventBus)
 	agentHandler := agenttransport.NewHandler(agentRunner)
 	plannerHandler := plannertransport.NewHandler(plannerService)
+	flagsHandler := flagstransport.NewHandler(flagsSvc)
+	postmortemHandler := postmortemtransport.NewHandler(postmortemService)
 	chatHandler := chattransport.NewHandler(ragEngine)
 	repoHandler := repotransport.NewHandler(repoService)
 	reviewHandler := reviewtransport.NewHandler(reviewService)
@@ -438,11 +509,18 @@ func (s *Server) setupRoutes() {
 	translatorHandler := translatortransport.NewHandler(translatorService)
 	testGenHandler := testgentransport.NewHandler(testGenService)
 	sqlGenHandler := sqlgentransport.NewHandler(sqlGenService)
+	sqlReviewHandler := sqlreviewtransport.NewHandler(sqlReviewService)
+	perfHandler := perftransport.NewHandler(perfService)
+	gateHandler := gatetransport.NewHandler(gateService)
 	cicdHandler := cicdtransport.NewHandler(cicdService)
 	commitGenHandler := commitgentransport.NewHandler(commitGenService)
 	releaseHandler := releasetransport.NewHandler(releaseService)
+	runbookHandler := runbooktransport.NewHandler(runbookService)
+	onboardingHandler := onboardingtransport.NewHandler(onboardingService)
+	prSummaryHandler := prsummarytransport.NewHandler(prSummaryService)
 	sessionHandler := sessiontransport.NewHandler(sessionService, ragEngine)
 	securityHandler := securitytransport.NewHandler(securityService)
+	jobsHandler := jobstransport.NewHandler(jobsService)
 	techDebtHandler := techdebttransport.NewHandler(techDebtService)
 	architectHandler := architecttransport.NewHandler(architectService)
 	profileHandler := profiletransport.NewHandler(s.profileService)
@@ -469,6 +547,9 @@ func (s *Server) setupRoutes() {
 	healthHandler := healthtransport.NewHandler(s.cfg)
 	healthHandler.SetCircuitBreakers(ollamaService, qdrantService)
 	authMiddleware := middleware.NewAuthMiddleware(s.cfg.JWTSecret)
+	auditSvc := auditservice.NewService(5000)
+	middleware.SetAuditRecorder(auditSvc)
+	auditHandler := audittransport.NewHandler(auditSvc)
 	localhostOnly := middleware.LocalhostOnly
 	legacyDeprecationDate := "2026-12-31"
 	legacy := func(next http.Handler, successorPath string) http.Handler {
@@ -491,6 +572,12 @@ func (s *Server) setupRoutes() {
 	v2InternalChat := middleware.WithJSONFieldAliases(http.HandlerFunc(chatHandler.Handle), map[string]string{
 		"conversation_id": "session_id",
 	})
+	featureGate := func(feature string, handler http.Handler) http.Handler {
+		return middleware.RequireFeatureFlag(flagsSvc, feature)(handler)
+	}
+	scopeGate := func(scope string, handler http.Handler) http.Handler {
+		return middleware.RequireScope(scope)(handler)
+	}
 
 	mux := http.NewServeMux()
 
@@ -512,11 +599,11 @@ func (s *Server) setupRoutes() {
 	mux.Handle("GET /internal/api-docs/routes", localhostOnly(http.HandlerFunc(apiExplorerHandler.Routes)))
 
 	// Indexer control (internal, solo localhost)
-	mux.Handle("GET /internal/index/status", localhostOnly(http.HandlerFunc(indexerHandler.Status)))
-	mux.Handle("POST /internal/index/reindex", localhostOnly(http.HandlerFunc(indexerHandler.Reindex)))
-	mux.Handle("POST /internal/index/start", localhostOnly(http.HandlerFunc(indexerHandler.StartWatcher)))
-	mux.Handle("POST /internal/index/stop", localhostOnly(http.HandlerFunc(indexerHandler.StopWatcher)))
-	mux.Handle("POST /internal/index/reset", localhostOnly(http.HandlerFunc(indexerHandler.ResetState)))
+	mux.Handle("GET /internal/index/status", localhostOnly(authMiddleware.JWT(scopeGate("indexer:control", http.HandlerFunc(indexerHandler.Status)))))
+	mux.Handle("POST /internal/index/reindex", localhostOnly(authMiddleware.JWT(scopeGate("indexer:control", http.HandlerFunc(indexerHandler.Reindex)))))
+	mux.Handle("POST /internal/index/start", localhostOnly(authMiddleware.JWT(scopeGate("indexer:control", http.HandlerFunc(indexerHandler.StartWatcher)))))
+	mux.Handle("POST /internal/index/stop", localhostOnly(authMiddleware.JWT(scopeGate("indexer:control", http.HandlerFunc(indexerHandler.StopWatcher)))))
+	mux.Handle("POST /internal/index/reset", localhostOnly(authMiddleware.JWT(scopeGate("indexer:control", http.HandlerFunc(indexerHandler.ResetState)))))
 	mux.Handle("POST /api/search", legacy(http.HandlerFunc(searchHandler.Handle), "/api/v2/search"))
 	mux.HandleFunc("POST /api/v1/search", searchHandler.Handle)
 	mux.Handle("POST /api/v2/search", v2Search)
@@ -533,12 +620,19 @@ func (s *Server) setupRoutes() {
 	mux.Handle("POST /api/v2/generate", authMiddleware.JWT(v2Generate))
 	mux.Handle("POST /api/agent", authMiddleware.JWT(http.HandlerFunc(agentHandler.Handle)))
 	mux.Handle("POST /api/agent/plan", authMiddleware.JWT(http.HandlerFunc(plannerHandler.ExecutePlan)))
+	mux.Handle("POST /api/flags", authMiddleware.JWT(http.HandlerFunc(flagsHandler.Create)))
+	mux.Handle("GET /api/flags", authMiddleware.JWT(http.HandlerFunc(flagsHandler.List)))
+	mux.Handle("GET /api/flags/{feature}", authMiddleware.JWT(http.HandlerFunc(flagsHandler.Get)))
+	mux.Handle("PUT /api/flags/{feature}", authMiddleware.JWT(http.HandlerFunc(flagsHandler.Update)))
+	mux.Handle("DELETE /api/flags/{feature}", authMiddleware.JWT(http.HandlerFunc(flagsHandler.Delete)))
+	mux.Handle("POST /api/postmortem/analyze", authMiddleware.JWT(featureGate("postmortem", http.HandlerFunc(postmortemHandler.Analyze))))
+	mux.Handle("POST /api/runbooks/generate", authMiddleware.JWT(featureGate("runbooks", http.HandlerFunc(runbookHandler.Generate))))
 	mux.Handle("POST /api/refactor", authMiddleware.JWT(http.HandlerFunc(repoHandler.Refactor)))
 	mux.Handle("GET /api/analyze-repo", authMiddleware.JWT(http.HandlerFunc(repoHandler.Analyze)))
 	mux.Handle("POST /api/review/diff", authMiddleware.JWT(http.HandlerFunc(reviewHandler.ReviewDiff)))
 	mux.Handle("POST /api/review/file", authMiddleware.JWT(http.HandlerFunc(reviewHandler.ReviewFile)))
-	mux.Handle("POST /api/docs/file", authMiddleware.JWT(http.HandlerFunc(docGenHandler.GenerateFileDoc)))
-	mux.Handle("POST /api/docs/readme", authMiddleware.JWT(http.HandlerFunc(docGenHandler.GenerateREADME)))
+	mux.Handle("POST /api/docs/file", authMiddleware.JWT(scopeGate("docs:apply", http.HandlerFunc(docGenHandler.GenerateFileDoc))))
+	mux.Handle("POST /api/docs/readme", authMiddleware.JWT(scopeGate("docs:apply", http.HandlerFunc(docGenHandler.GenerateREADME))))
 	mux.Handle("POST /api/debug/error", authMiddleware.JWT(http.HandlerFunc(debugHandler.AnalyzeError)))
 	mux.Handle("POST /api/debug/log", authMiddleware.JWT(http.HandlerFunc(debugHandler.AnalyzeLog)))
 	mux.Handle("POST /api/translate", authMiddleware.JWT(http.HandlerFunc(translatorHandler.Translate)))
@@ -548,11 +642,21 @@ func (s *Server) setupRoutes() {
 	mux.Handle("POST /api/sql/query", authMiddleware.JWT(http.HandlerFunc(sqlGenHandler.GenerateQuery)))
 	mux.Handle("POST /api/sql/migration", authMiddleware.JWT(http.HandlerFunc(sqlGenHandler.GenerateMigration)))
 	mux.Handle("POST /api/sql/explain", authMiddleware.JWT(http.HandlerFunc(sqlGenHandler.ExplainQuery)))
-	mux.Handle("POST /api/cicd/generate", authMiddleware.JWT(http.HandlerFunc(cicdHandler.GeneratePipeline)))
-	mux.Handle("POST /api/cicd/optimize", authMiddleware.JWT(http.HandlerFunc(cicdHandler.OptimizePipeline)))
+	mux.Handle("POST /api/sql/review", authMiddleware.JWT(featureGate("sql_review", http.HandlerFunc(sqlReviewHandler.Review))))
+	mux.Handle("GET /api/perf/endpoints", authMiddleware.JWT(featureGate("perf_endpoints", http.HandlerFunc(perfHandler.AnalyzeEndpoints))))
+	mux.Handle("GET /api/gate/deploy", authMiddleware.JWT(featureGate("deploy_gate", http.HandlerFunc(gateHandler.CheckDeployGate))))
+	mux.Handle("POST /api/onboarding/guide", authMiddleware.JWT(featureGate("onboarding_guide", http.HandlerFunc(onboardingHandler.GenerateGuide))))
+	mux.Handle("POST /api/pr/summary", authMiddleware.JWT(featureGate("pr_summary", http.HandlerFunc(prSummaryHandler.Summarize))))
+	mux.Handle("POST /api/cicd/generate", authMiddleware.JWT(scopeGate("cicd:apply", http.HandlerFunc(cicdHandler.GeneratePipeline))))
+	mux.Handle("POST /api/cicd/optimize", authMiddleware.JWT(scopeGate("cicd:apply", http.HandlerFunc(cicdHandler.OptimizePipeline))))
 	mux.Handle("POST /api/commit/message", authMiddleware.JWT(http.HandlerFunc(commitGenHandler.Message)))
 	mux.Handle("POST /api/commit/staged", authMiddleware.JWT(http.HandlerFunc(commitGenHandler.Staged)))
 	mux.Handle("POST /api/release/notes", authMiddleware.JWT(http.HandlerFunc(releaseHandler.BuildNotes)))
+	mux.Handle("GET /api/audit/events", authMiddleware.JWT(scopeGate("audit:read", http.HandlerFunc(auditHandler.List))))
+	mux.Handle("POST /api/jobs", authMiddleware.JWT(scopeGate("jobs:manage", http.HandlerFunc(jobsHandler.Create))))
+	mux.Handle("GET /api/jobs/{id}", authMiddleware.JWT(scopeGate("jobs:read", http.HandlerFunc(jobsHandler.Get))))
+	mux.Handle("POST /api/jobs/{id}/cancel", authMiddleware.JWT(scopeGate("jobs:manage", http.HandlerFunc(jobsHandler.Cancel))))
+	mux.Handle("GET /api/jobs/{id}/result", authMiddleware.JWT(scopeGate("jobs:read", http.HandlerFunc(jobsHandler.Result))))
 	mux.Handle("GET /api/architect/analyze", authMiddleware.JWT(http.HandlerFunc(architectHandler.AnalyzeProject)))
 	mux.Handle("POST /api/architect/refactor", authMiddleware.JWT(http.HandlerFunc(architectHandler.SuggestRefactor)))
 	mux.Handle("POST /api/sessions", authMiddleware.JWT(http.HandlerFunc(sessionHandler.Create)))
@@ -560,8 +664,8 @@ func (s *Server) setupRoutes() {
 	mux.Handle("GET /api/sessions/{id}/messages", authMiddleware.JWT(http.HandlerFunc(sessionHandler.GetMessages)))
 	mux.Handle("POST /api/sessions/{id}/chat", authMiddleware.JWT(http.HandlerFunc(sessionHandler.Chat)))
 	mux.Handle("PATCH /api/sessions/{id}/participants/{user}/role", authMiddleware.JWT(http.HandlerFunc(sessionHandler.UpdateRole)))
-	mux.Handle("POST /api/security/scan/file", authMiddleware.JWT(http.HandlerFunc(securityHandler.ScanFile)))
-	mux.Handle("POST /api/security/scan/repo", authMiddleware.JWT(http.HandlerFunc(securityHandler.ScanRepo)))
+	mux.Handle("POST /api/security/scan/file", authMiddleware.JWT(scopeGate("security:scan", http.HandlerFunc(securityHandler.ScanFile))))
+	mux.Handle("POST /api/security/scan/repo", authMiddleware.JWT(scopeGate("security:scan", http.HandlerFunc(securityHandler.ScanRepo))))
 	mux.Handle("GET /api/techdebt/priorities", authMiddleware.JWT(http.HandlerFunc(techDebtHandler.Priorities)))
 	mux.Handle("POST /api/memory/save", authMiddleware.JWT(http.HandlerFunc(memoryHandler.Save)))
 	mux.Handle("POST /api/memory/query", authMiddleware.JWT(http.HandlerFunc(memoryHandler.Query)))
@@ -583,15 +687,16 @@ func (s *Server) setupRoutes() {
 	mux.Handle("PUT /api/profile", authMiddleware.JWT(http.HandlerFunc(profileHandler.Put)))
 	mux.Handle("PUT /api/v1/profile", authMiddleware.JWT(http.HandlerFunc(profileHandler.Put)))
 	mux.Handle("PUT /api/v2/profile", authMiddleware.JWT(http.HandlerFunc(profileHandler.Put)))
-	mux.Handle("POST /api/patch", authMiddleware.JWT(http.HandlerFunc(patchHandler.Apply)))
+	mux.Handle("POST /api/patch", authMiddleware.JWT(scopeGate("patch:apply", http.HandlerFunc(patchHandler.Apply))))
 	mux.Handle("GET /api/patch/preview", authMiddleware.JWT(http.HandlerFunc(patchHandler.Preview)))
 	mux.Handle("POST /api/patch/sandbox/preview", authMiddleware.JWT(http.HandlerFunc(sandboxHandler.Preview)))
-	mux.Handle("POST /api/patch/sandbox/apply", authMiddleware.JWT(http.HandlerFunc(sandboxHandler.Apply)))
+	mux.Handle("POST /api/patch/sandbox/apply", authMiddleware.JWT(scopeGate("patch:apply", http.HandlerFunc(sandboxHandler.Apply))))
 	mux.Handle("GET /api/guardrails/rules", authMiddleware.JWT(http.HandlerFunc(guardrailsHandler.Rules)))
 
 	s.router = chain(
 		mux,
 		middleware.RequestID,
+		middleware.Trace,
 		middleware.LoggingWithStream(logStream),
 		middleware.CORS,
 		middleware.Compress,
@@ -639,9 +744,19 @@ func (s *Server) Shutdown(ctx context.Context) error {
 			slog.Warn("error al cerrar feedback de MongoDB", slog.String("error", err.Error()))
 		}
 	}
+	if s.flagsService != nil {
+		if err := s.flagsService.Disconnect(ctx); err != nil {
+			slog.Warn("error al cerrar flags de MongoDB", slog.String("error", err.Error()))
+		}
+	}
 	if s.outboxService != nil {
 		if err := s.outboxService.Shutdown(ctx); err != nil {
 			slog.Warn("error al cerrar worker de outbox", slog.String("error", err.Error()))
+		}
+	}
+	if s.jobsService != nil {
+		if err := s.jobsService.Shutdown(ctx); err != nil {
+			slog.Warn("error al cerrar worker de jobs", slog.String("error", err.Error()))
 		}
 	}
 	if s.eventCancel != nil {

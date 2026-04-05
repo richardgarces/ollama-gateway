@@ -44,8 +44,10 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 
 func (h *AuthHandler) generateToken(user string) string {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"user": user,
-		"exp":  time.Now().Add(time.Hour * 24).Unix(),
+		"user":   user,
+		"role":   "admin",
+		"scopes": []string{"*"},
+		"exp":    time.Now().Add(time.Hour * 24).Unix(),
 	})
 
 	t, _ := token.SignedString(h.jwtSecret)

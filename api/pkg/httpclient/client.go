@@ -4,6 +4,8 @@ import (
 	"net"
 	"net/http"
 	"time"
+
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 type Options struct {
@@ -34,7 +36,7 @@ func NewResilientClient(opts Options) *http.Client {
 
 	return &http.Client{
 		Timeout:   n.Timeout,
-		Transport: NewRetryRoundTripper(transport, n.MaxRetries),
+		Transport: otelhttp.NewTransport(NewRetryRoundTripper(transport, n.MaxRetries)),
 	}
 }
 

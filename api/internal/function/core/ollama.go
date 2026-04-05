@@ -21,6 +21,9 @@ import (
 	"ollama-gateway/pkg/httpclient"
 
 	"github.com/shirou/gopsutil/v4/mem"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 )
 
 type OllamaService struct {
@@ -188,10 +191,20 @@ func (s *OllamaService) Generate(model, prompt string) (string, error) {
 }
 
 func (s *OllamaService) GenerateWithContext(ctx context.Context, model, prompt string) (string, error) {
+	ctx, span := otel.Tracer("ollama-gateway/service/ollama").Start(ctx, "OllamaService.GenerateWithContext")
+	defer span.End()
+	span.SetAttributes(
+		attribute.String("llm.model.requested", strings.TrimSpace(model)),
+		attribute.Int("prompt.length", len(prompt)),
+	)
+
 	if err := s.ensureAvailable(); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return "", err
 	}
 	model = s.effectiveModel(model, false)
+	span.SetAttributes(attribute.String("llm.model.effective", model))
 	reqBody := domain.OllamaRequest{
 		Model:     model,
 		Prompt:    prompt,
@@ -201,6 +214,8 @@ func (s *OllamaService) GenerateWithContext(ctx context.Context, model, prompt s
 
 	data, err := json.Marshal(reqBody)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return "", err
 	}
 
@@ -227,9 +242,12 @@ func (s *OllamaService) GenerateWithContext(ctx context.Context, model, prompt s
 		return nil
 	})
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return "", err
 	}
 
+	span.SetStatus(codes.Ok, "")
 	return result.Response, nil
 }
 
@@ -288,7 +306,15 @@ func (s *OllamaService) StreamGenerate(model, prompt string, onChunk func(string
 // (no local buffer helpers; using bytes.NewBuffer and standard io)
 
 func (s *OllamaService) GetEmbedding(model, text string) ([]float64, error) {
+	ctx, span := otel.Tracer("ollama-gateway/service/ollama").Start(context.Background(), "OllamaService.GetEmbedding")
+	defer span.End()
+	span.SetAttributes(
+		attribute.String("embedding.model.requested", strings.TrimSpace(model)),
+		attribute.Int("embedding.text.length", len(text)),
+	)
+
 	model = s.effectiveEmbeddingModel(model)
+	span.SetAttributes(attribute.String("embedding.model.effective", model))
 	cacheKey := model + ":" + text
 	if raw, err := s.cache.Get(cacheKey); err == nil {
 		var embedding []float64
@@ -316,13 +342,15 @@ func (s *OllamaService) GetEmbedding(model, text string) ([]float64, error) {
 
 	data, err := json.Marshal(reqBody)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return nil, err
 	}
 
 	var result struct {
 		Embedding []float64 `json:"embedding"`
 	}
-	err = s.withBreaker(context.Background(), func(ctx context.Context) error {
+	err = s.withBreaker(ctx, func(ctx context.Context) error {
 		resp, postErr := s.client.Post(s.baseURL+"/api/embeddings", "application/json", bytes.NewBuffer(data))
 		if postErr != nil {
 			return fmt.Errorf("Ollama is not available. Check that the service is running.")
@@ -339,6 +367,8 @@ func (s *OllamaService) GetEmbedding(model, text string) ([]float64, error) {
 		return nil
 	})
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return nil, err
 	}
 
@@ -348,6 +378,7 @@ func (s *OllamaService) GetEmbedding(model, text string) ([]float64, error) {
 		}
 	}
 
+	span.SetStatus(codes.Ok, "")
 	return result.Embedding, nil
 }
 

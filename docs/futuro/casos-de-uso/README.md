@@ -1,6 +1,8 @@
 # Casos de Uso Posibles
 
 > Escenarios concretos de uso del gateway con el **prompt de Copilot** necesario para implementar cada uno.
+>
+> Estado: este documento conserva solo casos de uso pendientes. Los ya implementados fueron removidos.
 
 ---
 
@@ -64,22 +66,6 @@ Implementa un revisor de migraciones SQL:
 3. Crea endpoint POST /api/sql/review.
 4. Devuelve findings, riesgo global y recomendaciones de rollout.
 5. Incluye checks de rollback e idempotencia.
-```
-
----
-
-## 5. Asistente de Release Notes
-
-Generar release notes desde commits, PRs y cambios de API.
-
-```
-Prompt Copilot:
-Implementa generación de release notes:
-1. Crea internal/function/release/service.go con BuildReleaseNotes(fromRef, toRef string).
-2. Integra lectura de git log y convenciones Conventional Commits.
-3. Crea endpoint POST /api/release/notes.
-4. Secciones: Features, Fixes, Breaking Changes, Security.
-5. Opcional apply=true para escribir CHANGELOG.md.
 ```
 
 ---
@@ -148,16 +134,3 @@ Implementa resumen ejecutivo de PR:
 
 ---
 
-## 10. Priorizador de Deuda Tecnica
-
-Detectar y rankear deuda técnica por impacto y esfuerzo.
-
-```
-Prompt Copilot:
-Implementa priorización de deuda técnica:
-1. Crea internal/function/techdebt/service.go con AnalyzeTechDebt().
-2. Usa señales: complejidad, churn, bugs históricos, cobertura baja.
-3. Crea endpoint GET /api/techdebt/priorities.
-4. Devuelve backlog ordenado con esfuerzo estimado y valor esperado.
-5. Exporta reporte a docs/techdebt.md con apply=true.
-```

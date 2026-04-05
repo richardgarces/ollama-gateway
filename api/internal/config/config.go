@@ -70,6 +70,11 @@ type Config struct {
 	MongoPoolTimeoutSeconds  int
 	EmbeddingPoolSize        int
 	RetrievalPoolSize        int
+	OTelEnabled              bool
+	OTelServiceName          string
+	OTelExporterOTLPEndpoint string
+	OTelExporterInsecure     bool
+	OTelSamplePercent        int
 }
 
 func Load() *Config {
@@ -150,6 +155,11 @@ func loadFromEnv() *Config {
 		MongoPoolTimeoutSeconds:  getEnvAsInt("MONGO_POOL_TIMEOUT_SECONDS", 5),
 		EmbeddingPoolSize:        getEnvAsInt("EMBEDDING_POOL_SIZE", 8),
 		RetrievalPoolSize:        getEnvAsInt("RETRIEVAL_POOL_SIZE", 8),
+		OTelEnabled:              getEnvAsBool("OTEL_ENABLED", false),
+		OTelServiceName:          getEnv("OTEL_SERVICE_NAME", "ollama-gateway"),
+		OTelExporterOTLPEndpoint: getEnv("OTEL_EXPORTER_OTLP_ENDPOINT", "localhost:4317"),
+		OTelExporterInsecure:     getEnvAsBool("OTEL_EXPORTER_OTLP_INSECURE", true),
+		OTelSamplePercent:        getEnvAsInt("OTEL_SAMPLE_PERCENT", 100),
 	}
 }
 

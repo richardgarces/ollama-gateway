@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
+	"math/rand"
 	"net/http"
 	"time"
 
@@ -17,6 +19,7 @@ type retryRoundTripper struct {
 	maxAttempts int
 	baseBackoff time.Duration
 	maxBackoff  time.Duration
+	jitterRatio float64
 }
 
 func NewRetryRoundTripper(next http.RoundTripper, maxAttempts int) http.RoundTripper {
@@ -31,6 +34,7 @@ func NewRetryRoundTripper(next http.RoundTripper, maxAttempts int) http.RoundTri
 		maxAttempts: maxAttempts,
 		baseBackoff: 200 * time.Millisecond,
 		maxBackoff:  2 * time.Second,
+		jitterRatio: 0.2,
 	}
 }
 
@@ -135,9 +139,19 @@ func (r *retryRoundTripper) backoffFor(attempt int) time.Duration {
 	}
 	backoff := r.baseBackoff << (attempt - 1)
 	if backoff > r.maxBackoff {
-		return r.maxBackoff
+		backoff = r.maxBackoff
 	}
-	return backoff
+	if r.jitterRatio <= 0 || backoff <= 0 {
+		return backoff
+	}
+	base := float64(backoff)
+	window := base * r.jitterRatio
+	shift := (2*rand.Float64() - 1) * window
+	out := base + shift
+	if out < 0 {
+		out = 0
+	}
+	return time.Duration(math.Round(out))
 }
 
 func sleepWithContext(ctx context.Context, d time.Duration) bool {
