@@ -20,8 +20,8 @@ test-coverage: ## Ejecutar tests con cobertura
 	cd api && go test -v -count=1 -coverprofile=coverage.out ./...
 	cd api && go tool cover -html=coverage.out -o coverage.html
 
-test-coverage-gate: ## Validar cobertura minima (default 70%) en paquetes unitarios criticos
-	cd api && THRESHOLD=$${COVERAGE_THRESHOLD:-70}; \
+test-coverage-gate: ## Validar cobertura minima (default 80%) en paquetes unitarios criticos
+	cd api && THRESHOLD=$${COVERAGE_THRESHOLD:-80}; \
 	PKGS="./internal/config ./internal/function/runtime_config/... ./internal/server"; \
 	OUT=$$(go test -cover $$PKGS); \
 	echo "$$OUT"; \

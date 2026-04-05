@@ -4,8 +4,8 @@ Fecha: 2026-04-04
 
 ## Resumen
 
-- Cumple: 14
-- Parcial: 5
+- Cumple: 17
+- Parcial: 2
 - No cumple: 1
 
 ## Matriz
@@ -21,25 +21,23 @@ Fecha: 2026-04-04
 | 7 | Generar docstrings/comentarios | Cumple | Slash `/docstring` en `resolveSlashChatPrompt` |
 | 8 | Detectar bugs | Cumple | Comandos `copilot-local.fixErrors`, `copilot-local.debugError` + endpoint `/api/debug/error` |
 | 9 | Traducir entre lenguajes | Cumple | Comando `copilot-local.translateSelection` + endpoint `/api/translate` |
-| 10 | Búsqueda semántica en proyecto | Parcial | Backend expone `/api/search` y `/api/v2/search`, pero no hay comando dedicado en extensión para consulta tipo “¿dónde…?” |
+| 10 | Búsqueda semántica en proyecto | Cumple | Comando `copilot-local.semanticSearch` en extensión con consulta a `/api/v2/search` y apertura de resultados |
 | 11 | Historial de conversaciones | Cumple | Persistencia en `globalState/workspaceState`, comando `copilot-local.searchHistory` |
 | 12 | Contexto multi-archivo | Parcial | Hay indexador/RAG en backend (`api/internal/function/indexer`, `api/internal/function/core/rag.go`), pero no selector explícito de archivos relacionados en UI |
-| 13 | Comandos slash (/explain, /test, /refactor, /fix, /doc) | Parcial | Existen `/explain`, `/refactor`, `/test`, `/docstring`; faltan aliases exactos `/fix` y `/doc` |
+| 13 | Comandos slash (/explain, /test, /refactor, /fix, /doc) | Cumple | `resolveSlashChatPrompt` soporta `/explain`, `/refactor`, `/test`, `/docstring`, `/fix` y `/doc` |
 | 14 | Streaming de respuestas | Cumple | Flujo por WS/HTTP/CLI con chunks en `streamWS`, `streamHTTP`, `streamCLI` |
 | 15 | Selección de modelo | Cumple | Selector de modelos en chat (`/api/models`) y setting `copilotLocal.model` |
 | 16 | Soporte multi-lenguaje | Cumple | Flujo de traducción + endpoints para Go/Python/JS/TS/SQL/Bash según herramientas actuales |
 | 17 | Insertar código generado | Cumple | Mensajes webview `apply` y `insert`, además inserción desde favoritos |
-| 18 | Cancelar generación | Parcial | Cancelación clara en inline (`AbortController`) y WS (`type: cancel`), pero no botón/acción de cancelar chat en UI |
+| 18 | Cancelar generación | Cumple | Botón `Stop` en chat + cancelación por `AbortController` para flujo WS/HTTP |
 | 19 | Diff visual antes de aceptar refactor | No cumple | Hay explicación “diff-style” textual, pero no vista de diff integrada para aceptar/rechazar cambios |
-| 20 | Modo offline completo + validar modelos locales | Parcial | Arquitectura local sin CDN/servicios cloud para chat principal, pero falta verificación explícita de “modelos descargados/validados” desde la UI |
+| 20 | Modo offline completo + validar modelos locales | Parcial | Se añadió validación explícita (`copilot-local.validateLocalModels` + badge en chat); queda pendiente enforcement estricto de modo 100% local |
 
 ## Prioridad sugerida para cerrar brechas
 
 1. Implementar diff visual interactivo (ideal con `vscode.diff` + apply parcial).
-2. Añadir cancelación de chat en curso (botón Stop en panel, `AbortController` en flujo chat).
-3. Completar aliases slash `/fix` y `/doc`.
-4. Crear comando de búsqueda semántica dedicada sobre `/api/v2/search`.
-5. Añadir validación de modelos locales (estado descargado/disponible) en selector.
+2. Añadir selector explícito de archivos relacionados en UI para contexto multi-archivo.
+3. Endurecer modo offline para bloquear destinos no locales cuando el perfil lo requiera.
 
 ---
 
@@ -83,3 +81,12 @@ Fecha: 2026-04-04
 - Cobertura global backend: `total: (statements) 34.1%` (comando ejecutado: `go tool cover -func=coverage.out | tail -n 1` en `api/`).
 - Coverage gate crítico (>=70%) implementado y validado: `make test-coverage-gate`.
 - Tamaño de artefactos runtime de extensión validado: `node scripts/check-size.js` -> `Package footprint 0.10MB within 5MB`.
+
+## Actualizacion de implementacion (2026-04-04)
+
+Durante la revision de README en `docs/futuro/` se cerraron brechas concretas en la extension VS Code:
+
+- Comando dedicado de busqueda semantica: `copilot-local.semanticSearch` (consulta a `/api/v2/search`, QuickPick de resultados y apertura de archivo cuando hay ruta resoluble).
+- Validacion explicita de modelos locales: `copilot-local.validateLocalModels` + estado visible en el chat (`models: <n>` o `models: unavailable`).
+- Alias slash faltantes completados en chat: `/fix` y `/doc`.
+- Cancelacion de chat en curso desde UI con boton `Stop` (AbortController y cancelacion en WS/HTTP).

@@ -26,7 +26,9 @@
     "onCommand:copilot-local.resetQualityAlerts",
     "onCommand:copilot-local.switchProfile",
     "onCommand:copilot-local.clearSessionState",
-    "onCommand:copilot-local.explainTestFailure"
+    "onCommand:copilot-local.explainTestFailure",
+    "onCommand:copilot-local.semanticSearch",
+    "onCommand:copilot-local.validateLocalModels"
   ],
   "main": "dist/extension.js",
   "scripts": {
@@ -125,6 +127,14 @@
       {
         "command": "copilot-local.explainTestFailure",
         "title": "Copilot Local: Explain Test Failure"
+      },
+      {
+        "command": "copilot-local.semanticSearch",
+        "title": "Copilot Local: Semantic Search"
+      },
+      {
+        "command": "copilot-local.validateLocalModels",
+        "title": "Copilot Local: Validate Local Models"
       }
     ],
     "keybindings": [
@@ -209,6 +219,14 @@
         {
           "command": "copilot-local.switchProfile",
           "group": "1_main"
+        },
+        {
+          "command": "copilot-local.semanticSearch",
+          "group": "1_main"
+        },
+        {
+          "command": "copilot-local.validateLocalModels",
+          "group": "2_tools"
         },
         {
           "command": "copilot-local.clearSessionState",

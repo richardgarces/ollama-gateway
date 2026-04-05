@@ -1,6 +1,6 @@
 # Copilot Local — VS Code Extension
 
-Extensión VS Code que se conecta al gateway local (`/openai/v1/chat/completions`) vía HTTP con streaming SSE. Incluye un panel de chat Webview interactivo y fallback automático al binario `copilot-cli` si el servidor no está disponible.
+Extensión VS Code que se conecta al gateway local para chat/completions y features de productividad. Usa cadena de transporte con fallback WebSocket -> HTTP -> CLI para mantener continuidad cuando hay fallos parciales.
 
 ## Funciones
 
@@ -43,6 +43,11 @@ Extensión VS Code que se conecta al gateway local (`/openai/v1/chat/completions
 3. Presiona **F5** para lanzar el Extension Host.
 4. En la ventana nueva, usa `Cmd+Shift+P` → "Copilot Local: Open Chat Panel".
 
+## Validaciones útiles
+
+- Verificar tamaño de artefacto de extensión: `npm run size:check`
+- Compilar bootstrap TS/LSP: `npm run build`
+
 ## Arquitectura
 
 ```
@@ -51,14 +56,14 @@ Extensión VS Code que se conecta al gateway local (`/openai/v1/chat/completions
 │  (extension.js)        │
 │                        │
 │  ┌──────────────────┐  │
-│  │ Chat Webview     │  │    HTTP POST + SSE
+│  │ Chat Webview     │  │    WS -> HTTP -> CLI fallback
 │  │ (HTML/JS panel)  │──┼──────────────────────┐
 │  └──────────────────┘  │                      │
 │                        │                      ▼
 │  ┌──────────────────┐  │    ┌──────────────────────────┐
-│  │ Output Channel   │──┼───▶│ POST /openai/v1/         │
+│  │ Output Channel   │──┼───▶│ /openai/v1/chat/completions │
 │  │ (Send Selection) │  │    │   chat/completions       │
-│  └──────────────────┘  │    │   stream: true            │
+│  └──────────────────┘  │    │   y endpoints /api/*      │
 │                        │    └──────────────────────────┘
 │  ┌──────────────────┐  │                      │
 │  │ CLI Fallback     │──┼───▶ copilot-cli      │

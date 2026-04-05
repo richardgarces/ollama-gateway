@@ -414,10 +414,22 @@ function streamHTTP(prompt, model, onChunk, onDone, abortCtl, metrics) {
       }
     });
     res.on('end', () => finish());
-    res.on('error', (e) => finish(e));
+    res.on('error', (e) => {
+      if (abortCtl?.signal?.aborted) {
+        finish();
+        return;
+      }
+      finish(e);
+    });
   });
 
-  req.on('error', (e) => finish(e));
+  req.on('error', (e) => {
+    if (abortCtl?.signal?.aborted) {
+      finish();
+      return;
+    }
+    finish(e);
+  });
   if (abortCtl) {
     abortCtl.signal.addEventListener('abort', () => req.destroy());
   }
@@ -498,16 +510,27 @@ function streamWS(prompt, model, onChunk, onDone, abortCtl, metrics) {
     }
   };
 
-  ws.onerror = () => finish(new Error('WebSocket connection failed'));
+  ws.onerror = () => {
+    if (abortCtl?.signal?.aborted) {
+      finish();
+      return;
+    }
+    finish(new Error('WebSocket connection failed'));
+  };
   ws.onclose = (event) => {
-    if (!finished) finish(new Error(event?.reason || 'WebSocket closed before completion'));
+    if (finished) return;
+    if (abortCtl?.signal?.aborted) {
+      finish();
+      return;
+    }
+    finish(new Error(event?.reason || 'WebSocket closed before completion'));
   };
 
   if (abortCtl) {
     abortCtl.signal.addEventListener('abort', () => {
       try { ws.send(JSON.stringify({ type: 'cancel' })); } catch {}
       try { ws.close(); } catch {}
-      finish(new Error('aborted'));
+      finish();
     });
   }
 }
@@ -665,6 +688,7 @@ body { font-family: var(--vscode-font-family); font-size: ${fontSize}px; backgro
 #leftTools { display: flex; align-items: center; gap: 8px; }
 #rightTools { display: flex; align-items: center; gap: 8px; }
 #profileBadge { font-size: 11px; color: var(--vscode-descriptionForeground); border: 1px solid var(--vscode-panel-border); border-radius: 999px; padding: 2px 8px; }
+#modelsHealth { font-size: 11px; color: var(--vscode-descriptionForeground); border: 1px solid var(--vscode-panel-border); border-radius: 999px; padding: 2px 8px; }
 #models { background: var(--vscode-dropdown-background); color: var(--vscode-dropdown-foreground); border: 1px solid var(--vscode-dropdown-border); padding: 4px; }
 #codeOnlyWrap { display: flex; align-items: center; gap: 6px; font-size: 12px; }
 #focusStats { font-size: 11px; color: var(--vscode-descriptionForeground); min-width: 70px; }
@@ -707,7 +731,7 @@ button:disabled { opacity: 0.5; cursor: default; }
 </style>
 </head>
 <body>
-<div id="header"><div id="leftTools"><strong>Copilot Local Chat</strong><span id="profileBadge">profile: -</span><select id="models"></select></div><div id="rightTools"><label id="codeOnlyWrap"><input id="codeOnlyToggle" type="checkbox"/> Code only</label><span id="focusStats">0 blocks</span><div id="voiceControls"><button id="micBtn" title="Dictado por voz">Mic</button><span id="voiceStatus" data-state="stopped">detenido</span></div><button id="compareBtn">Compare</button><button id="regressionBtn" disabled>Regression Test</button><button id="clearHistoryBtn">Clear History</button><button id="exportBtn">Export</button></div></div>
+<div id="header"><div id="leftTools"><strong>Copilot Local Chat</strong><span id="profileBadge">profile: -</span><span id="modelsHealth" title="Estado de modelos locales">models: --</span><select id="models"></select></div><div id="rightTools"><label id="codeOnlyWrap"><input id="codeOnlyToggle" type="checkbox"/> Code only</label><span id="focusStats">0 blocks</span><div id="voiceControls"><button id="micBtn" title="Dictado por voz">Mic</button><span id="voiceStatus" data-state="stopped">detenido</span></div><button id="compareBtn">Compare</button><button id="regressionBtn" disabled>Regression Test</button><button id="stopBtn" disabled>Stop</button><button id="clearHistoryBtn">Clear History</button><button id="exportBtn">Export</button></div></div>
 <div id="sessionBanner"></div>
 <div id="compareView"><div id="compareHeader"><strong>Compare Models</strong><div><span id="compareMeta"></span> <button id="closeCompareBtn">Close</button></div></div><div id="compareGrid"><div class="compareCol"><div class="compareTitle" id="compareLeftTitle">-</div><div class="compareStats" id="compareLeftStats"></div><div class="compareContent" id="compareLeftContent"></div></div><div class="compareCol"><div class="compareTitle" id="compareRightTitle">-</div><div class="compareStats" id="compareRightStats"></div><div class="compareContent" id="compareRightContent"></div></div></div></div>
 <div id="messages"></div>
@@ -720,6 +744,7 @@ const sendBtn = document.getElementById('send');
 const exportBtn = document.getElementById('exportBtn');
 const compareBtn = document.getElementById('compareBtn');
 const regressionBtn = document.getElementById('regressionBtn');
+const stopBtn = document.getElementById('stopBtn');
 const closeCompareBtn = document.getElementById('closeCompareBtn');
 const clearHistoryBtn = document.getElementById('clearHistoryBtn');
 const codeOnlyToggleEl = document.getElementById('codeOnlyToggle');
@@ -736,6 +761,7 @@ const compareRightTitleEl = document.getElementById('compareRightTitle');
 const compareRightStatsEl = document.getElementById('compareRightStats');
 const compareRightContentEl = document.getElementById('compareRightContent');
 const profileBadgeEl = document.getElementById('profileBadge');
+const modelsHealthEl = document.getElementById('modelsHealth');
 const sessionBannerEl = document.getElementById('sessionBanner');
 const voiceEnabled = ${voiceInputEnabled ? 'true' : 'false'};
 let pending = null;
@@ -851,6 +877,20 @@ function updateProfileBadge(profile) {
   const temperature = Number(profile?.temperature || 0).toFixed(2);
   profileBadgeEl.textContent = 'profile: ' + id;
   profileBadgeEl.title = 'model=' + model + ' | lang=' + lang + ' | temperature=' + temperature;
+}
+
+function updateModelsHealth(status) {
+  if (!modelsHealthEl) return;
+  const ok = !!status?.ok;
+  const count = Number(status?.count || 0);
+  const source = String(status?.source || 'unknown');
+  if (ok) {
+    modelsHealthEl.textContent = 'models: ' + String(count);
+    modelsHealthEl.title = 'Modelos locales listos (' + String(count) + ', source=' + source + ')';
+    return;
+  }
+  modelsHealthEl.textContent = 'models: unavailable';
+  modelsHealthEl.title = String(status?.error || 'No se pudieron validar modelos locales');
 }
 
 function showSessionBanner(text) {
@@ -1002,6 +1042,7 @@ function sendNow(text) {
   if (!text.trim()) return;
   addMessage('user', text);
   sendBtn.disabled = true;
+  if (stopBtn) stopBtn.disabled = false;
   startAssistant();
   vscode.postMessage({ type: 'chat', text, model: modelsEl.value || '' });
 }
@@ -1154,6 +1195,11 @@ regressionBtn.addEventListener('click', () => {
   sendNow(regressionPromptDraft);
 });
 
+stopBtn.addEventListener('click', () => {
+  vscode.postMessage({ type: 'cancelChat' });
+  if (stopBtn) stopBtn.disabled = true;
+});
+
 modelsEl.addEventListener('change', () => {
   vscode.postMessage({ type: 'modelSelected', model: modelsEl.value || '' });
 });
@@ -1177,8 +1223,8 @@ updateFocusStats();
 window.addEventListener('message', (e) => {
   const msg = e.data;
   if (msg.type === 'chunk') { updatePending(msg.text || ''); return; }
-  if (msg.type === 'done') { pending = null; sendBtn.disabled = false; return; }
-  if (msg.type === 'error') { updatePending('\\n[Error: ' + (msg.text || 'unknown') + ']'); pending = null; sendBtn.disabled = false; return; }
+  if (msg.type === 'done') { pending = null; sendBtn.disabled = false; if (stopBtn) stopBtn.disabled = true; return; }
+  if (msg.type === 'error') { updatePending('\\n[Error: ' + (msg.text || 'unknown') + ']'); pending = null; sendBtn.disabled = false; if (stopBtn) stopBtn.disabled = true; return; }
   if (msg.type === 'prefill') { promptEl.value = msg.text || ''; promptEl.focus(); return; }
   if (msg.type === 'runPrompt') { sendNow(msg.text || ''); return; }
   if (msg.type === 'externalResult') { addMessage('assistant', msg.text || ''); return; }
@@ -1201,6 +1247,10 @@ window.addEventListener('message', (e) => {
     updateProfileBadge(msg.profile || {});
     return;
   }
+  if (msg.type === 'modelsValidation') {
+    updateModelsHealth(msg);
+    return;
+  }
   if (msg.type === 'sessionRestored') {
     showSessionBanner(msg.text || 'session restored');
     return;
@@ -1221,6 +1271,7 @@ function activate(context) {
   let chatPanel = null;
   let activeSessionId = '';
   let selectedModel = getConfig().model;
+  let activeChatAbort = null;
   let consecutiveErrors = 0;
   const activeQualityAlerts = new Set();
   let shouldShowRestoredBanner = false;
@@ -1428,19 +1479,67 @@ function activate(context) {
   context.subscriptions.push(vscode.languages.registerInlineCompletionItemProvider({ pattern: '**' }, inlineProvider));
 
   const streamWithFallback = (prompt, model, onChunk, onDone) => {
+    const abortCtl = new AbortController();
+    activeChatAbort = abortCtl;
+
+    const done = (err) => {
+      if (activeChatAbort === abortCtl) activeChatAbort = null;
+      onDone(err);
+    };
+
     streamWS(prompt, model, onChunk, (wsErr) => {
+      if (abortCtl.signal.aborted) {
+        done();
+        return;
+      }
       if (!wsErr) {
-        onDone();
+        done();
         return;
       }
       streamHTTP(prompt, model, onChunk, (httpErr) => {
-        if (!httpErr) {
-          onDone();
+        if (abortCtl.signal.aborted) {
+          done();
           return;
         }
-        streamCLI(prompt, model, onChunk, onDone);
-      }, undefined, metrics);
-    }, undefined, metrics);
+        if (!httpErr) {
+          done();
+          return;
+        }
+        streamCLI(prompt, model, onChunk, done);
+      }, abortCtl, metrics);
+    }, abortCtl, metrics);
+  };
+
+  const validateLocalModels = async () => {
+    const cfg = getConfig();
+    try {
+      const res = await getJSON('/api/models');
+      const models = Array.isArray(res?.models) ? res.models.filter((m) => String(m || '').trim()) : [];
+      if (models.length > 0) {
+        return { ok: true, count: models.length, source: 'api', models };
+      }
+      return { ok: false, count: 0, source: 'api', models: [], error: 'La API no devolvio modelos' };
+    } catch (err) {
+      return {
+        ok: false,
+        count: 0,
+        source: 'fallback',
+        models: [cfg.model || 'local-rag'],
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  };
+
+  const publishModelsValidationToPanel = async () => {
+    if (!chatPanel) return;
+    const status = await validateLocalModels();
+    chatPanel.webview.postMessage({
+      type: 'modelsValidation',
+      ok: status.ok,
+      count: status.count,
+      source: status.source,
+      error: status.error || '',
+    });
   };
 
   const getAvailableModels = async () => {
@@ -1468,6 +1567,7 @@ function activate(context) {
         temperature: cfg.temperature,
       },
     });
+    await publishModelsValidationToPanel();
   };
 
   const chooseTwoModels = async () => {
@@ -1518,7 +1618,13 @@ function activate(context) {
     if (text.toLowerCase().startsWith('/test')) {
       return 'Create robust tests for this code:\n' + body;
     }
+    if (text.toLowerCase().startsWith('/fix')) {
+      return 'Fix the errors in this code:\n' + body;
+    }
     if (text.toLowerCase().startsWith('/docstring')) {
+      return 'Add high quality docstrings/comments to this code:\n' + body;
+    }
+    if (text.toLowerCase().startsWith('/doc')) {
       return 'Add high quality docstrings/comments to this code:\n' + body;
     }
     return text;
@@ -1590,6 +1696,15 @@ function activate(context) {
     };
 
     chatPanel.webview.onDidReceiveMessage(async (msg) => {
+      if (msg.type === 'cancelChat') {
+        if (activeChatAbort) {
+          try { activeChatAbort.abort(); } catch {}
+          activeChatAbort = null;
+        }
+        chatPanel?.webview.postMessage({ type: 'done' });
+        return;
+      }
+
       if (msg.type === 'chat') {
         const model = String(msg.model || getConfig().chatModel);
         const resolvedText = resolveSlashChatPrompt(msg.text);
@@ -1786,6 +1901,116 @@ function activate(context) {
 
   context.subscriptions.push(vscode.commands.registerCommand('copilot-local.openChat', async () => {
     await openChatPanel();
+  }));
+
+  context.subscriptions.push(vscode.commands.registerCommand('copilot-local.semanticSearch', async () => {
+    const query = await vscode.window.showInputBox({
+      title: 'Semantic Search',
+      prompt: 'Consulta semantica (ej: auth middleware)',
+      ignoreFocusOut: true,
+    });
+    const cleanQuery = String(query || '').trim();
+    if (!cleanQuery) return;
+
+    const topRaw = await vscode.window.showInputBox({
+      title: 'Semantic Search',
+      prompt: 'Top resultados (1-20)',
+      value: '8',
+      ignoreFocusOut: true,
+    });
+    const top = Math.max(1, Math.min(20, Number.parseInt(String(topRaw || '8'), 10) || 8));
+
+    try {
+      const res = await postJSON('/api/v2/search', { query: cleanQuery, top });
+      const hits = Array.isArray(res?.result) ? res.result : [];
+      if (hits.length === 0) {
+        vscode.window.showInformationMessage('Semantic search: sin resultados');
+        return;
+      }
+
+      const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
+      const toAbsolutePath = (candidate) => {
+        const c = String(candidate || '').trim();
+        if (!c) return '';
+        if (path.isAbsolute(c) && fs.existsSync(c)) return c;
+        if (!root) return '';
+        const normalized = c.replace(/^\.?\//, '');
+        const direct = path.join(root, normalized);
+        if (fs.existsSync(direct)) return direct;
+        const apiScoped = path.join(root, 'api', normalized);
+        if (fs.existsSync(apiScoped)) return apiScoped;
+        return '';
+      };
+
+      const picks = hits.slice(0, 80).map((hit, idx) => {
+        const score = Number(hit?.score || 0);
+        const payload = (hit && typeof hit.payload === 'object' && hit.payload) ? hit.payload : {};
+        const pathCandidate = String(payload.path || payload.file_path || payload.file || payload.filename || '');
+        const snippet = String(payload.code || payload.text || payload.content || payload.summary || '').replace(/\s+/g, ' ').trim();
+        const labelBase = pathCandidate ? path.basename(pathCandidate) : ('resultado-' + String(idx + 1));
+        return {
+          label: labelBase + ' | score=' + score.toFixed(3),
+          description: pathCandidate || '(sin ruta)',
+          detail: snippet.length > 180 ? snippet.slice(0, 180) + '…' : (snippet || 'sin snippet'),
+          value: { pathCandidate, snippet, hit },
+        };
+      });
+
+      const picked = await vscode.window.showQuickPick(picks, {
+        title: 'Semantic Search Results',
+        placeHolder: 'Selecciona un resultado para abrirlo',
+        matchOnDescription: true,
+        matchOnDetail: true,
+      });
+      if (!picked) return;
+
+      const absPath = toAbsolutePath(picked.value.pathCandidate);
+      if (absPath) {
+        const doc = await vscode.workspace.openTextDocument(absPath);
+        const editor = await vscode.window.showTextDocument(doc, { preview: false });
+        const line = Number(picked.value.hit?.payload?.line || picked.value.hit?.payload?.line_number || 0);
+        if (line > 0 && line <= doc.lineCount) {
+          const pos = new vscode.Position(line - 1, 0);
+          editor.selection = new vscode.Selection(pos, pos);
+          editor.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter);
+        }
+        return;
+      }
+
+      const fallback = [
+        'No se pudo resolver una ruta local para este resultado.',
+        '',
+        'Path reportado: ' + (picked.value.pathCandidate || '(none)'),
+        'Snippet:',
+        picked.value.snippet || '(none)',
+        '',
+        'Raw payload:',
+        JSON.stringify(picked.value.hit || {}, null, 2),
+      ].join('\n');
+      const doc = await vscode.workspace.openTextDocument({ content: fallback, language: 'json' });
+      await vscode.window.showTextDocument(doc, { preview: false, viewColumn: vscode.ViewColumn.Beside });
+    } catch (err) {
+      vscode.window.showErrorMessage('Semantic search failed: ' + (err instanceof Error ? err.message : String(err)));
+    }
+  }));
+
+  context.subscriptions.push(vscode.commands.registerCommand('copilot-local.validateLocalModels', async () => {
+    const status = await validateLocalModels();
+    if (chatPanel) {
+      chatPanel.webview.postMessage({
+        type: 'modelsValidation',
+        ok: status.ok,
+        count: status.count,
+        source: status.source,
+        error: status.error || '',
+      });
+    }
+
+    if (status.ok) {
+      vscode.window.showInformationMessage('Modelos locales validados: ' + status.count + ' disponibles');
+      return;
+    }
+    vscode.window.showWarningMessage('No se pudieron validar modelos locales: ' + (status.error || 'error desconocido'));
   }));
 
   context.subscriptions.push(vscode.commands.registerCommand('copilot-local.switchProfile', async () => {

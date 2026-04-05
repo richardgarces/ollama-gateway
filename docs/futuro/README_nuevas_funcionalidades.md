@@ -45,6 +45,9 @@ Esto habilita una fase de expansion enfocada en escalabilidad, gobernanza, segur
 
 Valor: habilita uso SaaS empresarial con separacion estricta de datos.
 
+Prompt sugerido:
+"Disena e implementa multi-tenant real en el gateway Go siguiendo Clean Architecture. Incluye aislamiento por tenant en Qdrant, cache, perfiles y configuracion por workspace, propagacion de tenant_id en middleware, validaciones de seguridad, migraciones necesarias y tests unitarios + integracion para evitar fuga de datos entre tenants."
+
 ### 3.1.2 Cola de trabajos asincronos
 
 - Job queue para procesos pesados:
@@ -60,6 +63,9 @@ Valor: habilita uso SaaS empresarial con separacion estricta de datos.
 
 Valor: evita timeouts y mejora UX en operaciones largas.
 
+Prompt sugerido:
+"Implementa una cola de trabajos asincronos para indexacion, security scan, analisis de arquitectura y docgen. Crea endpoints para crear job, consultar estado, cancelar job y obtener resultado. Usa workers con control de concurrencia, reintentos, timeout configurable, trazabilidad por request_id y tests para exito/error/cancelacion."
+
 ### 3.1.3 Modo alta disponibilidad
 
 - Cache distribuida (Redis) para respuestas RAG y sesiones temporales.
@@ -67,6 +73,9 @@ Valor: evita timeouts y mejora UX en operaciones largas.
 - Health checks avanzados por dependencia (Ollama/Qdrant/Mongo/Redis).
 
 Valor: operacion estable en escenarios de mayor carga.
+
+Prompt sugerido:
+"Fortalece el modo alta disponibilidad del gateway: integra cache distribuida Redis para RAG/sesiones, coordinacion de workers para evitar trabajo duplicado y health checks avanzados por dependencia (Ollama, Qdrant, Mongo, Redis). Incluye metricas Prometheus y pruebas de degradacion/fallback."
 
 ---
 
@@ -84,6 +93,9 @@ Valor: operacion estable en escenarios de mayor carga.
 
 Valor: reduce riesgo operacional y cumple requisitos enterprise.
 
+Prompt sugerido:
+"Agrega RBAC con roles admin/maintainer/developer/viewer y scopes por endpoint (security:scan, cicd:apply, docs:apply, patch:apply, indexer:control). Implementa middleware de autorizacion, errores HTTP consistentes, auditoria de denegaciones y tests de matriz rol x endpoint."
+
 ### 3.2.2 Secret scanning y policy engine
 
 - Escaneo de secretos (tokens, keys, passwords hardcoded).
@@ -92,6 +104,9 @@ Valor: reduce riesgo operacional y cumple requisitos enterprise.
   - exigir revisiones humanas en acciones de alto impacto
 
 Valor: prevencion temprana de incidentes de seguridad.
+
+Prompt sugerido:
+"Implementa secret scanning y un policy engine configurable. Detecta secretos comunes en codigo/diffs, clasifica severidad y bloquea acciones apply de alto impacto cuando haya findings criticos. Permite reglas por tenant/workspace y agrega reportes claros + tests de politicas."
 
 ### 3.2.3 Auditoria trazable
 
@@ -104,6 +119,9 @@ Valor: prevencion temprana de incidentes de seguridad.
 - Exportacion para cumplimiento (JSON/CSV/SIEM).
 
 Valor: cumplimiento y forensica de cambios.
+
+Prompt sugerido:
+"Implementa auditoria trazable de acciones sensibles registrando quien, cuando, endpoint, payload resumido y resultado. Define esquema de almacenamiento, endpoint de consulta filtrada y exportacion JSON/CSV. Asegura redaccion de datos sensibles y cobertura de pruebas sobre integridad del log."
 
 ---
 
@@ -120,6 +138,9 @@ Valor: cumplimiento y forensica de cambios.
 
 Valor: mejora mantenibilidad y consistencia arquitectonica.
 
+Prompt sugerido:
+"Crea un modulo de refactor guiado por patrones que detecte code smells y proponga refactors estandar (extraer interfaz, separar responsabilidades, manejo uniforme de errores). Devuelve diff sugerido, riesgo estimado y justificacion tecnica. Incluye pruebas sobre casos reales del repositorio."
+
 ### 3.3.2 Asistente de performance
 
 - Analisis de hotspots de codigo y consultas.
@@ -131,6 +152,9 @@ Valor: mejora mantenibilidad y consistencia arquitectonica.
 
 Valor: mejora performance sin ensayo-error manual.
 
+Prompt sugerido:
+"Construye un asistente de performance que analice hotspots de codigo/consultas y entregue recomendaciones accionables sobre concurrencia, memoria, estructuras de datos y queries. Incluye scoring de impacto/ esfuerzo, evidencias y endpoints para ejecutar analisis por archivo o repo."
+
 ### 3.3.3 Test intelligence
 
 - Priorizacion de tests por impacto de cambios.
@@ -138,6 +162,9 @@ Valor: mejora performance sin ensayo-error manual.
 - Reporte de riesgo de merge.
 
 Valor: feedback mas rapido con mayor confianza.
+
+Prompt sugerido:
+"Implementa test intelligence por diff: priorizacion de tests por impacto, generacion de suite de regresion y reporte de riesgo de merge. Usa analisis de dependencias/cambios, integra con endpoints existentes y produce salida consumible por VS Code y CI/CD."
 
 ---
 
@@ -156,6 +183,9 @@ Valor: feedback mas rapido con mayor confianza.
 
 Valor: flujo end-to-end sin salir del editor.
 
+Prompt sugerido:
+"Extiende la extension de VS Code con comandos architectReview, securityScanCurrentFile, generatePipelineAndOpen y createPRSummary. Conecta cada comando al backend, maneja errores con UX clara, agrega telemetria local de latencia y tests de comandos criticos."
+
 ### 3.4.2 Playbooks por tipo de incidente
 
 - Plantillas para debugging y respuesta:
@@ -166,6 +196,9 @@ Valor: flujo end-to-end sin salir del editor.
 
 Valor: estandariza respuestas operativas y reduce MTTR.
 
+Prompt sugerido:
+"Implementa playbooks ejecutables para incidentes (build roto, test flaky, degradacion de latencia, findings de seguridad). Cada playbook debe tener pasos, comandos sugeridos, criterios de salida y evidencia requerida. Exponerlos por API y UI de VS Code."
+
 ### 3.4.3 API products externos
 
 - Versionado formal de API (v1/v2).
@@ -173,6 +206,9 @@ Valor: estandariza respuestas operativas y reduce MTTR.
 - Documentacion publica con ejemplos por caso de uso.
 
 Valor: facilita adopcion por equipos y terceros.
+
+Prompt sugerido:
+"Productiza la API externa: consolida versionado formal v1/v2, genera SDK minimo para JS/TS y Go, y publica documentacion con ejemplos por caso de uso. Mantiene compatibilidad retroactiva con deprecations claras y pruebas contractuales."
 
 ---
 
@@ -188,12 +224,18 @@ Valor: facilita adopcion por equipos y terceros.
 
 Valor: decisiones de roadmap basadas en impacto real.
 
+Prompt sugerido:
+"Implementa metricas de valor de negocio en el gateway y dashboard: tiempo promedio de resolucion, ratio de cache reutilizada, findings criticos pre-merge y tasa de aceptacion de sugerencias. Define eventos, agregaciones, endpoint de consulta y visualizaciones basicas."
+
 ### 3.5.2 Trazas por feature
 
 - Correlacion request -> servicio -> LLM -> storage.
 - Breakdown de latencia por etapa (RAG, embedding, vector search, generation).
 
 Valor: diagnostico rapido y optimizacion dirigida.
+
+Prompt sugerido:
+"Agrega trazas por feature con correlacion request -> servicio -> LLM -> storage y breakdown de latencia por etapa (RAG, embedding, vector search, generation). Expone datos via Prometheus/logs estructurados y asegura trazabilidad por request_id."
 
 ---
 
