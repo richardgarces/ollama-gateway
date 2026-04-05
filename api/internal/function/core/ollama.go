@@ -29,6 +29,7 @@ import (
 type OllamaService struct {
 	baseURL      string
 	client       *http.Client
+	streamClient *http.Client
 	cache        cache.Cache
 	cacheTTL     time.Duration
 	maxCacheSize int
@@ -67,6 +68,15 @@ func NewOllamaService(cfg *config.Config, logger *slog.Logger, embeddingCache ca
 		client: httpclient.NewResilientClient(httpclient.Options{
 			Timeout:             time.Duration(cfg.PoolTimeoutSeconds) * time.Second,
 			MaxRetries:          cfg.HTTPMaxRetries,
+			MaxConnsPerHost:     cfg.PoolMaxOpen,
+			MaxIdleConns:        cfg.PoolMaxOpen,
+			MaxIdleConnsPerHost: cfg.PoolMaxIdle,
+			IdleConnTimeout:     time.Duration(cfg.PoolTimeoutSeconds) * time.Second,
+			DialTimeout:         time.Duration(cfg.PoolTimeoutSeconds) * time.Second,
+		}),
+		streamClient: httpclient.NewResilientClient(httpclient.Options{
+			Timeout:             10 * time.Minute, // Long timeout for LLM streaming
+			MaxRetries:          0,
 			MaxConnsPerHost:     cfg.PoolMaxOpen,
 			MaxIdleConns:        cfg.PoolMaxOpen,
 			MaxIdleConnsPerHost: cfg.PoolMaxIdle,
@@ -276,7 +286,7 @@ func (s *OllamaService) StreamGenerate(model, prompt string, onChunk func(string
 	}
 
 	return s.withBreaker(context.Background(), func(ctx context.Context) error {
-		resp, postErr := s.client.Post(s.baseURL+"/api/generate", "application/json", bytes.NewBuffer(data))
+		resp, postErr := s.streamClient.Post(s.baseURL+"/api/generate", "application/json", bytes.NewBuffer(data))
 		if postErr != nil {
 			return fmt.Errorf("Ollama is not available. Check that the service is running.")
 		}
@@ -328,7 +338,7 @@ func (s *OllamaService) StreamChat(model string, messages []domain.Message, onCh
 	}
 
 	return s.withBreaker(context.Background(), func(ctx context.Context) error {
-		resp, postErr := s.client.Post(s.baseURL+"/api/chat", "application/json", bytes.NewBuffer(data))
+		resp, postErr := s.streamClient.Post(s.baseURL+"/api/chat", "application/json", bytes.NewBuffer(data))
 		if postErr != nil {
 			return fmt.Errorf("Ollama is not available. Check that the service is running.")
 		}
