@@ -1,4 +1,3 @@
-package jobs
 package service
 
 import (
@@ -13,7 +12,6 @@ import (
 	"time"
 
 	archdomain "ollama-gateway/internal/function/core/domain"
-	securitydomain "ollama-gateway/internal/function/security/domain"
 )
 
 const (
@@ -40,7 +38,7 @@ type JobType string
 type JobStatus string
 
 type SecurityScanner interface {
-	ScanRepo() (securitydomain.SecurityReport, error)
+	ScanRepo() (archdomain.SecurityReport, error)
 }
 
 type ReadmeGenerator interface {
@@ -67,9 +65,9 @@ type Dependencies struct {
 }
 
 type CreateInput struct {
-	Type        JobType                 `json:"type"`
-	Params      map[string]interface{}  `json:"params,omitempty"`
-	RequestedBy string                  `json:"requested_by,omitempty"`
+	Type        JobType                `json:"type"`
+	Params      map[string]interface{} `json:"params,omitempty"`
+	RequestedBy string                 `json:"requested_by,omitempty"`
 }
 
 type Job struct {

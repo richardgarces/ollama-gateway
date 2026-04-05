@@ -1,3 +1,6 @@
 .gitignore
-node_modules/
+src/
+scripts/
+tsconfig.json
 *.md
+!README.md

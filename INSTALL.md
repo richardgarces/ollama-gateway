@@ -195,10 +195,11 @@ Solo localhost:
    - `copilotLocal.apiUrl`
    - `copilotLocal.model`
    - `copilotLocal.jwtToken`
-4. Probar comandos:
+4. Probar comandos desde `Cmd+Shift+P`:
    - `Copilot Local: Open Chat Panel`
    - `Copilot Local: Join Shared Session`
    - `Copilot Local: Suggest Commit Message`
+5. Atajo por defecto para abrir chat: `Cmd+Alt+K` (macOS).
 
 ## 10. Comandos Make utiles
 

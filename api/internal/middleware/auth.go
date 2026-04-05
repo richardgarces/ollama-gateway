@@ -28,8 +28,8 @@ const scopesContextKey authContextKey = "scopes"
 
 var roleScopes = map[string][]string{
 	"admin":      {"*"},
-	"maintainer": {"security:scan", "cicd:apply", "docs:apply", "patch:apply", "indexer:control", "audit:read", "jobs:manage", "jobs:read"},
-	"developer":  {"security:scan", "docs:apply", "jobs:read"},
+	"maintainer": {"security:scan", "policy:enforce", "cicd:apply", "docs:apply", "patch:apply", "indexer:control", "audit:read", "jobs:manage", "jobs:read", "test:analyze"},
+	"developer":  {"security:scan", "docs:apply", "jobs:read", "test:analyze"},
 	"viewer":     {},
 }
 

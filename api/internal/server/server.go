@@ -2,8 +2,10 @@ package server
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -98,12 +100,15 @@ import (
 	techdebttransport "ollama-gateway/internal/function/techdebt/transport"
 	testgenservice "ollama-gateway/internal/function/testgen"
 	testgentransport "ollama-gateway/internal/function/testgen/transport"
+	testintelservice "ollama-gateway/internal/function/testintel"
+	testinteltransport "ollama-gateway/internal/function/testintel/transport"
 	translatorservice "ollama-gateway/internal/function/translator"
 	translatortransport "ollama-gateway/internal/function/translator/transport"
 	wstransport "ollama-gateway/internal/function/ws/transport"
 	"ollama-gateway/internal/middleware"
 	"ollama-gateway/internal/utils/observability"
 	"ollama-gateway/pkg/cache"
+	"ollama-gateway/pkg/httputil"
 
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -133,6 +138,9 @@ func GetRouteDefinitions() []RouteDefinition {
 		{Method: "GET", Path: "/health/liveness", Description: "Liveness detail", ExampleBody: "", Protected: false},
 		{Method: "GET", Path: "/health/readiness", Description: "Readiness probe", ExampleBody: "", Protected: false},
 		{Method: "GET", Path: "/metrics", Description: "Metricas JSON internas", ExampleBody: "", Protected: false},
+		{Method: "GET", Path: "/metrics/value", Description: "Metricas de valor de negocio derivadas", ExampleBody: "", Protected: false},
+		{Method: "GET", Path: "/metrics/traces/features", Description: "Trazas agregadas por feature con breakdown de etapas", ExampleBody: "", Protected: false},
+		{Method: "GET", Path: "/api/tenant/context", Description: "Contexto tenant resuelto para la request actual", ExampleBody: "", Protected: true},
 		{Method: "GET", Path: "/api/models", Description: "Modelos disponibles de Ollama", ExampleBody: "", Protected: false},
 		{Method: "POST", Path: "/api/models/recommend", Description: "(Legacy) Recomendar modelo; responde con headers de deprecación", ExampleBody: "{\n  \"task_type\": \"code\",\n  \"sla_latency_ms\": 2000,\n  \"token_budget\": 3000\n}", Protected: true},
 		{Method: "POST", Path: "/api/v1/models/recommend", Description: "Recomendar modelo (v1)", ExampleBody: "{\n  \"task_type\": \"code\",\n  \"sla_latency_ms\": 2000,\n  \"token_budget\": 3000\n}", Protected: true},
@@ -149,6 +157,7 @@ func GetRouteDefinitions() []RouteDefinition {
 		{Method: "POST", Path: "/internal/index/reset", Description: "Resetear estado indexer", ExampleBody: "{}", Protected: false, LocalhostOnly: true},
 		{Method: "GET", Path: "/api-docs", Description: "SPA API Explorer embebido", ExampleBody: "", Protected: false, LocalhostOnly: true},
 		{Method: "GET", Path: "/internal/api-docs/routes", Description: "Definiciones de rutas para API explorer", ExampleBody: "", Protected: false, LocalhostOnly: true},
+		{Method: "GET", Path: "/api/spec", Description: "Especificacion OpenAPI publica", ExampleBody: "", Protected: false},
 		{Method: "POST", Path: "/api/search", Description: "(Legacy) Busqueda semantica; responde con headers de deprecación", ExampleBody: "{\n  \"query\": \"auth middleware\",\n  \"top\": 5\n}", Protected: false},
 		{Method: "POST", Path: "/api/v1/search", Description: "Busqueda semantica (v1)", ExampleBody: "{\n  \"query\": \"auth middleware\",\n  \"top\": 5\n}", Protected: false},
 		{Method: "POST", Path: "/api/v2/search", Description: "Busqueda semantica (v2, acepta aliases top_k/k)", ExampleBody: "{\n  \"query\": \"auth middleware\",\n  \"top\": 5\n}", Protected: false},
@@ -169,6 +178,8 @@ func GetRouteDefinitions() []RouteDefinition {
 		{Method: "DELETE", Path: "/api/flags/{feature}", Description: "Eliminar feature flag", ExampleBody: "", Protected: true},
 		{Method: "POST", Path: "/api/postmortem/analyze", Description: "Analizar incidente y generar reporte postmortem", ExampleBody: "{\n  \"logs\": \"ERROR timeout contacting qdrant\",\n  \"start_time\": \"2026-04-04T10:00:00Z\",\n  \"end_time\": \"2026-04-04T10:10:00Z\",\n  \"commit_hash\": \"abc123def456\",\n  \"metrics\": {\"latency_ms\": 1832, \"error_rate\": 0.17}\n}", Protected: true},
 		{Method: "POST", Path: "/api/runbooks/generate", Description: "Generar runbook operativo desde tipo de incidente y contexto", ExampleBody: "{\n  \"incident_type\": \"db-lock-timeout\",\n  \"context\": \"timeouts despues de migracion\",\n  \"apply\": false\n}", Protected: true},
+		{Method: "GET", Path: "/api/runbooks", Description: "Listar playbooks/runbooks guardados", ExampleBody: "", Protected: true},
+		{Method: "GET", Path: "/api/runbooks/{incident_type}", Description: "Obtener playbook/runbook por tipo de incidente", ExampleBody: "", Protected: true},
 		{Method: "POST", Path: "/api/refactor", Description: "Refactor de archivo", ExampleBody: "{\n  \"path\": \"api/internal/server/server.go\",\n  \"prompt\": \"extrae helper\"\n}", Protected: true},
 		{Method: "GET", Path: "/api/analyze-repo", Description: "Analisis de repositorio", ExampleBody: "", Protected: true},
 		{Method: "POST", Path: "/api/review/diff", Description: "Code review de diff", ExampleBody: "{\n  \"diff\": \"diff --git ...\"\n}", Protected: true},
@@ -181,6 +192,7 @@ func GetRouteDefinitions() []RouteDefinition {
 		{Method: "POST", Path: "/api/translate/file", Description: "Traducir archivo", ExampleBody: "{\n  \"path\": \"api/internal/domain/models.go\",\n  \"to\": \"typescript\"\n}", Protected: true},
 		{Method: "POST", Path: "/api/testgen", Description: "Generar tests desde codigo", ExampleBody: "{\n  \"lang\": \"go\",\n  \"code\": \"func Add(a,b int) int { return a+b }\"\n}", Protected: true},
 		{Method: "POST", Path: "/api/testgen/file", Description: "Generar tests para archivo", ExampleBody: "{\n  \"path\": \"api/internal/function/repo/repo.go\",\n  \"apply\": false\n}", Protected: true},
+		{Method: "POST", Path: "/api/testintel/prioritize", Description: "Priorizar paquetes de tests y riesgo de merge a partir de diff", ExampleBody: "{\n  \"diff\": \"diff --git ...\"\n}", Protected: true},
 		{Method: "POST", Path: "/api/sql/query", Description: "Generar query SQL", ExampleBody: "{\n  \"description\": \"listar usuarios activos\",\n  \"dialect\": \"postgres\"\n}", Protected: true},
 		{Method: "POST", Path: "/api/sql/migration", Description: "Generar migracion SQL", ExampleBody: "{\n  \"description\": \"crear tabla sessions\",\n  \"dialect\": \"postgres\"\n}", Protected: true},
 		{Method: "POST", Path: "/api/sql/explain", Description: "Explicar query SQL", ExampleBody: "{\n  \"sql\": \"SELECT * FROM users WHERE id = 1\"\n}", Protected: true},
@@ -201,6 +213,7 @@ func GetRouteDefinitions() []RouteDefinition {
 		{Method: "GET", Path: "/api/jobs/{id}/result", Description: "Obtener resultado final de job", ExampleBody: "", Protected: true},
 		{Method: "GET", Path: "/api/architect/analyze", Description: "Analisis de arquitectura", ExampleBody: "", Protected: true},
 		{Method: "POST", Path: "/api/architect/refactor", Description: "Sugerencia de refactor", ExampleBody: "{\n  \"path\": \"api/internal/function/core/router.go\"\n}", Protected: true},
+		{Method: "POST", Path: "/api/architect/patterns", Description: "Detectar patrones de refactor y riesgo por archivo", ExampleBody: "{\n  \"path\": \"api/internal/server/server.go\"\n}", Protected: true},
 		{Method: "POST", Path: "/api/sessions", Description: "Crear sesion compartida", ExampleBody: "{}", Protected: true},
 		{Method: "POST", Path: "/api/sessions/{id}/join", Description: "Unirse a sesion", ExampleBody: "{}", Protected: true},
 		{Method: "GET", Path: "/api/sessions/{id}/messages", Description: "Obtener mensajes de sesion", ExampleBody: "", Protected: true},
@@ -208,6 +221,8 @@ func GetRouteDefinitions() []RouteDefinition {
 		{Method: "PATCH", Path: "/api/sessions/{id}/participants/{user}/role", Description: "Actualizar rol de participante (owner/editor/viewer/moderator)", ExampleBody: "{\n  \"role\": \"editor\"\n}", Protected: true},
 		{Method: "POST", Path: "/api/security/scan/file", Description: "Escanear seguridad de archivo", ExampleBody: "{\n  \"path\": \"api/internal/server/server.go\"\n}", Protected: true},
 		{Method: "POST", Path: "/api/security/scan/repo", Description: "Escanear seguridad del repo", ExampleBody: "{}", Protected: true},
+		{Method: "POST", Path: "/api/security/scan/secrets", Description: "Escanear secretos hardcodeados en el repo", ExampleBody: "{}", Protected: true},
+		{Method: "POST", Path: "/api/security/policy/evaluate", Description: "Evaluar policy para acciones de alto impacto (apply/deploy/merge)", ExampleBody: "{\n  \"action\": \"cicd:apply\"\n}", Protected: true},
 		{Method: "GET", Path: "/api/techdebt/priorities", Description: "Priorizar deuda técnica por señales de riesgo", ExampleBody: "", Protected: true},
 		{Method: "POST", Path: "/api/memory/save", Description: "Guardar evento en memoria semántica persistente", ExampleBody: "{\n  \"summary\": \"se resolvió bug de auth\",\n  \"priority\": 8,\n  \"tags\": [\"auth\", \"fix\"]\n}", Protected: true},
 		{Method: "POST", Path: "/api/memory/query", Description: "Consultar contexto histórico relevante", ExampleBody: "{\n  \"query\": \"error auth token\",\n  \"top_k\": 5\n}", Protected: true},
@@ -522,6 +537,7 @@ func (s *Server) setupRoutes() {
 	securityHandler := securitytransport.NewHandler(securityService)
 	jobsHandler := jobstransport.NewHandler(jobsService)
 	techDebtHandler := techdebttransport.NewHandler(techDebtService)
+	testIntelHandler := testinteltransport.NewHandler(testintelservice.NewService())
 	architectHandler := architecttransport.NewHandler(architectService)
 	profileHandler := profiletransport.NewHandler(s.profileService)
 	patchHandler := patchtransport.NewHandler(s.cfg.RepoRoot, patchService, guardrailsService)
@@ -530,7 +546,7 @@ func (s *Server) setupRoutes() {
 	metricsHandler := metricstransport.NewHandler(metricsCollector)
 	contextHandler := contexttransport.NewHandler(contextService)
 	memoryHandler := memorytransport.NewHandler(memoryService)
-	feedbackHandler := feedbacktransport.NewHandler(feedbackService)
+	feedbackHandler := feedbacktransport.NewHandlerWithMetrics(feedbackService, metricsCollector)
 	outboxHandler := outboxtransport.NewHandler(outboxSvc)
 	runtimeConfigHandler := runtimeconfigtransport.NewHandler(runtimeconfigservice.NewService(s.cfg))
 	modelRecommenderHandler := modelrecommendertransport.NewHandler(modelRecommenderService)
@@ -586,6 +602,8 @@ func (s *Server) setupRoutes() {
 	mux.HandleFunc("GET /health/liveness", healthHandler.Liveness)
 	mux.HandleFunc("GET /health/readiness", healthHandler.Readiness)
 	mux.HandleFunc("GET /metrics", metricsHandler.Handle)
+	mux.HandleFunc("GET /metrics/value", metricsHandler.Value)
+	mux.HandleFunc("GET /metrics/traces/features", metricsHandler.TraceFeatures)
 	mux.HandleFunc("GET /api/models", modelsHandler.List)
 	// Prometheus scrape endpoint
 	mux.Handle("GET /metrics/prometheus", promhttp.Handler())
@@ -597,6 +615,30 @@ func (s *Server) setupRoutes() {
 	mux.Handle("GET /internal/dashboard/status", localhostOnly(http.HandlerFunc(dashboardHandler.Status)))
 	mux.Handle("GET /internal/logs/stream", localhostOnly(http.HandlerFunc(dashboardHandler.LogsStream)))
 	mux.Handle("GET /internal/api-docs/routes", localhostOnly(http.HandlerFunc(apiExplorerHandler.Routes)))
+	mux.HandleFunc("GET /api/spec", func(w http.ResponseWriter, r *http.Request) {
+		for _, candidate := range []string{
+			filepath.Join(s.cfg.RepoRoot, "api", "docs", "openapi.json"),
+			filepath.Join(s.cfg.RepoRoot, "docs", "openapi.json"),
+		} {
+			path, err := filepath.Abs(candidate)
+			if err != nil {
+				continue
+			}
+			content, readErr := os.ReadFile(path)
+			if readErr != nil {
+				if errors.Is(readErr, os.ErrNotExist) {
+					continue
+				}
+				http.Error(w, `{"error":"no se pudo leer api spec"}`, http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(content)
+			return
+		}
+		http.Error(w, `{"error":"api spec no encontrada"}`, http.StatusNotFound)
+	})
 
 	// Indexer control (internal, solo localhost)
 	mux.Handle("GET /internal/index/status", localhostOnly(authMiddleware.JWT(scopeGate("indexer:control", http.HandlerFunc(indexerHandler.Status)))))
@@ -619,6 +661,9 @@ func (s *Server) setupRoutes() {
 	mux.Handle("POST /api/v1/generate", authMiddleware.JWT(http.HandlerFunc(generateHandler.Handle)))
 	mux.Handle("POST /api/v2/generate", authMiddleware.JWT(v2Generate))
 	mux.Handle("POST /api/agent", authMiddleware.JWT(http.HandlerFunc(agentHandler.Handle)))
+	mux.Handle("GET /api/tenant/context", authMiddleware.JWT(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		httputil.WriteJSON(w, http.StatusOK, map[string]string{"tenant": middleware.TenantFromContext(r.Context())})
+	})))
 	mux.Handle("POST /api/agent/plan", authMiddleware.JWT(http.HandlerFunc(plannerHandler.ExecutePlan)))
 	mux.Handle("POST /api/flags", authMiddleware.JWT(http.HandlerFunc(flagsHandler.Create)))
 	mux.Handle("GET /api/flags", authMiddleware.JWT(http.HandlerFunc(flagsHandler.List)))
@@ -627,6 +672,8 @@ func (s *Server) setupRoutes() {
 	mux.Handle("DELETE /api/flags/{feature}", authMiddleware.JWT(http.HandlerFunc(flagsHandler.Delete)))
 	mux.Handle("POST /api/postmortem/analyze", authMiddleware.JWT(featureGate("postmortem", http.HandlerFunc(postmortemHandler.Analyze))))
 	mux.Handle("POST /api/runbooks/generate", authMiddleware.JWT(featureGate("runbooks", http.HandlerFunc(runbookHandler.Generate))))
+	mux.Handle("GET /api/runbooks", authMiddleware.JWT(featureGate("runbooks", http.HandlerFunc(runbookHandler.List))))
+	mux.Handle("GET /api/runbooks/{incident_type}", authMiddleware.JWT(featureGate("runbooks", http.HandlerFunc(runbookHandler.Get))))
 	mux.Handle("POST /api/refactor", authMiddleware.JWT(http.HandlerFunc(repoHandler.Refactor)))
 	mux.Handle("GET /api/analyze-repo", authMiddleware.JWT(http.HandlerFunc(repoHandler.Analyze)))
 	mux.Handle("POST /api/review/diff", authMiddleware.JWT(http.HandlerFunc(reviewHandler.ReviewDiff)))
@@ -639,6 +686,7 @@ func (s *Server) setupRoutes() {
 	mux.Handle("POST /api/translate/file", authMiddleware.JWT(http.HandlerFunc(translatorHandler.TranslateFile)))
 	mux.Handle("POST /api/testgen", authMiddleware.JWT(http.HandlerFunc(testGenHandler.Generate)))
 	mux.Handle("POST /api/testgen/file", authMiddleware.JWT(http.HandlerFunc(testGenHandler.GenerateForFile)))
+	mux.Handle("POST /api/testintel/prioritize", authMiddleware.JWT(scopeGate("test:analyze", http.HandlerFunc(testIntelHandler.Prioritize))))
 	mux.Handle("POST /api/sql/query", authMiddleware.JWT(http.HandlerFunc(sqlGenHandler.GenerateQuery)))
 	mux.Handle("POST /api/sql/migration", authMiddleware.JWT(http.HandlerFunc(sqlGenHandler.GenerateMigration)))
 	mux.Handle("POST /api/sql/explain", authMiddleware.JWT(http.HandlerFunc(sqlGenHandler.ExplainQuery)))
@@ -659,6 +707,7 @@ func (s *Server) setupRoutes() {
 	mux.Handle("GET /api/jobs/{id}/result", authMiddleware.JWT(scopeGate("jobs:read", http.HandlerFunc(jobsHandler.Result))))
 	mux.Handle("GET /api/architect/analyze", authMiddleware.JWT(http.HandlerFunc(architectHandler.AnalyzeProject)))
 	mux.Handle("POST /api/architect/refactor", authMiddleware.JWT(http.HandlerFunc(architectHandler.SuggestRefactor)))
+	mux.Handle("POST /api/architect/patterns", authMiddleware.JWT(http.HandlerFunc(architectHandler.DetectPatterns)))
 	mux.Handle("POST /api/sessions", authMiddleware.JWT(http.HandlerFunc(sessionHandler.Create)))
 	mux.Handle("POST /api/sessions/{id}/join", authMiddleware.JWT(http.HandlerFunc(sessionHandler.Join)))
 	mux.Handle("GET /api/sessions/{id}/messages", authMiddleware.JWT(http.HandlerFunc(sessionHandler.GetMessages)))
@@ -666,6 +715,8 @@ func (s *Server) setupRoutes() {
 	mux.Handle("PATCH /api/sessions/{id}/participants/{user}/role", authMiddleware.JWT(http.HandlerFunc(sessionHandler.UpdateRole)))
 	mux.Handle("POST /api/security/scan/file", authMiddleware.JWT(scopeGate("security:scan", http.HandlerFunc(securityHandler.ScanFile))))
 	mux.Handle("POST /api/security/scan/repo", authMiddleware.JWT(scopeGate("security:scan", http.HandlerFunc(securityHandler.ScanRepo))))
+	mux.Handle("POST /api/security/scan/secrets", authMiddleware.JWT(scopeGate("security:scan", http.HandlerFunc(securityHandler.ScanSecretsRepo))))
+	mux.Handle("POST /api/security/policy/evaluate", authMiddleware.JWT(scopeGate("policy:enforce", http.HandlerFunc(securityHandler.EvaluatePolicy))))
 	mux.Handle("GET /api/techdebt/priorities", authMiddleware.JWT(http.HandlerFunc(techDebtHandler.Priorities)))
 	mux.Handle("POST /api/memory/save", authMiddleware.JWT(http.HandlerFunc(memoryHandler.Save)))
 	mux.Handle("POST /api/memory/query", authMiddleware.JWT(http.HandlerFunc(memoryHandler.Query)))
@@ -696,12 +747,13 @@ func (s *Server) setupRoutes() {
 	s.router = chain(
 		mux,
 		middleware.RequestID,
+		middleware.Tenant,
 		middleware.Trace,
 		middleware.LoggingWithStream(logStream),
 		middleware.CORS,
 		middleware.Compress,
 		middleware.Metrics(metricsCollector),
-		middleware.RateLimit(rateLimiter, s.cfg, "/health", "/health/liveness", "/health/readiness", "/metrics", "/ws/chat"),
+		middleware.RateLimit(rateLimiter, s.cfg, "/health", "/health/liveness", "/health/readiness", "/metrics", "/metrics/value", "/metrics/traces/features", "/ws/chat"),
 	)
 }
 

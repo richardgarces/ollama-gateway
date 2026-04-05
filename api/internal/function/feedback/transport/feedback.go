@@ -10,11 +10,20 @@ import (
 )
 
 type Handler struct {
-	svc *feedbackservice.Service
+	svc     *feedbackservice.Service
+	metrics feedbackMetricsObserver
+}
+
+type feedbackMetricsObserver interface {
+	ObserveFeedbackRating(rating int)
 }
 
 func NewHandler(svc *feedbackservice.Service) *Handler {
 	return &Handler{svc: svc}
+}
+
+func NewHandlerWithMetrics(svc *feedbackservice.Service, metrics feedbackMetricsObserver) *Handler {
+	return &Handler{svc: svc, metrics: metrics}
 }
 
 func (h *Handler) Save(w http.ResponseWriter, r *http.Request) {
@@ -32,6 +41,9 @@ func (h *Handler) Save(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		httputil.WriteError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	if h.metrics != nil {
+		h.metrics.ObserveFeedbackRating(rec.Rating)
 	}
 	httputil.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"saved":    true,

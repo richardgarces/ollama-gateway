@@ -103,6 +103,7 @@ type RepoService interface {
 type ArchitectService interface {
 	AnalyzeProject() (ArchReport, error)
 	SuggestRefactor(path string) (string, error)
+	DetectPatternRefactors(path string) (PatternReport, error)
 }
 
 type SQLGenService interface {

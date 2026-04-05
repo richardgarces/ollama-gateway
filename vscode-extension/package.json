@@ -2,7 +2,7 @@
   "name": "copilot-local",
   "displayName": "Copilot Local",
   "description": "Local Copilot extension with HTTP SSE streaming and chat panel",
-  "version": "0.1.0",
+  "version": "0.1.7",
   "engines": {
     "vscode": "^1.60.0"
   },
@@ -28,18 +28,23 @@
     "onCommand:copilot-local.clearSessionState",
     "onCommand:copilot-local.explainTestFailure",
     "onCommand:copilot-local.semanticSearch",
-    "onCommand:copilot-local.validateLocalModels"
+    "onCommand:copilot-local.validateLocalModels",
+    "onCommand:copilot-local.architectReview",
+    "onCommand:copilot-local.securityScanCurrentFile",
+    "onCommand:copilot-local.generatePipelineAndOpen",
+    "onCommand:copilot-local.createPRSummary"
   ],
   "main": "dist/extension.js",
   "scripts": {
+    "precompile": "node scripts/bump-version.js",
     "compile": "tsc -p .",
     "build": "npm run compile",
     "size:check": "node scripts/check-size.js"
   },
   "devDependencies": {
     "typescript": "^5.8.3",
-	"@types/node": "^22.15.17",
-	"@types/vscode": "^1.60.0"
+    "@types/node": "^22.15.17",
+    "@types/vscode": "^1.60.0"
   },
   "dependencies": {
     "vscode-languageclient": "^9.0.1",
@@ -135,6 +140,22 @@
       {
         "command": "copilot-local.validateLocalModels",
         "title": "Copilot Local: Validate Local Models"
+      },
+      {
+        "command": "copilot-local.architectReview",
+        "title": "Copilot Local: Architect Review Current File"
+      },
+      {
+        "command": "copilot-local.securityScanCurrentFile",
+        "title": "Copilot Local: Security Scan Current File"
+      },
+      {
+        "command": "copilot-local.generatePipelineAndOpen",
+        "title": "Copilot Local: Generate Pipeline And Open"
+      },
+      {
+        "command": "copilot-local.createPRSummary",
+        "title": "Copilot Local: Create PR Summary"
       }
     ],
     "keybindings": [
@@ -146,8 +167,8 @@
       },
       {
         "command": "copilot-local.openChat",
-        "key": "ctrl+shift+k",
-        "mac": "cmd+shift+k"
+        "key": "ctrl+alt+k",
+        "mac": "cmd+alt+k"
       },
       {
         "command": "copilot-local.explainSelection",
@@ -226,6 +247,22 @@
         },
         {
           "command": "copilot-local.validateLocalModels",
+          "group": "2_tools"
+        },
+        {
+          "command": "copilot-local.architectReview",
+          "group": "2_tools"
+        },
+        {
+          "command": "copilot-local.securityScanCurrentFile",
+          "group": "2_tools"
+        },
+        {
+          "command": "copilot-local.generatePipelineAndOpen",
+          "group": "2_tools"
+        },
+        {
+          "command": "copilot-local.createPRSummary",
           "group": "2_tools"
         },
         {

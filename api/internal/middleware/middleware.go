@@ -33,9 +33,11 @@ func LoggingWithStream(stream *observability.LogStream) func(http.Handler) http.
 			latency := time.Since(start)
 			requestID := RequestIDFromContext(r.Context())
 			traceID := observability.TraceIDFromContext(r.Context())
+			tenantID := TenantFromContext(r.Context())
 			slog.Info("http request",
 				slog.String("request_id", requestID),
 				slog.String("trace_id", traceID),
+				slog.String("tenant_id", tenantID),
 				slog.String("method", r.Method),
 				slog.String("path", r.URL.Path),
 				slog.Int("status", rec.statusCode),
@@ -50,6 +52,7 @@ func LoggingWithStream(stream *observability.LogStream) func(http.Handler) http.
 					Fields: map[string]interface{}{
 						"request_id": requestID,
 						"trace_id":   traceID,
+						"tenant_id":  tenantID,
 						"method":     r.Method,
 						"path":       r.URL.Path,
 						"status":     rec.statusCode,

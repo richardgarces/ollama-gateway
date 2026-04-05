@@ -2,6 +2,7 @@ package observability
 
 import (
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -25,6 +26,31 @@ type MetricsSnapshot struct {
 	MissRate      float64       `json:"miss_rate"`
 	Pools         []PoolMetric  `json:"pools"`
 	Routes        []RouteMetric `json:"routes"`
+}
+
+type ValueMetricsSnapshot struct {
+	GeneratedAt                   time.Time `json:"generated_at"`
+	AvgTaskResolutionMS           float64   `json:"avg_task_resolution_ms"`
+	CacheReuseRate                float64   `json:"cache_reuse_rate"`
+	CriticalFindingsPreMergeRate  float64   `json:"critical_findings_pre_merge_rate"`
+	SuggestionAcceptanceRate      float64   `json:"suggestion_acceptance_rate"`
+	TotalTaskRequests             int64     `json:"total_task_requests"`
+	TotalPreMergeSecurityRequests int64     `json:"total_pre_merge_security_requests"`
+	FeedbackSamples               int64     `json:"feedback_samples"`
+}
+
+type FeatureTraceMetric struct {
+	Feature        string             `json:"feature"`
+	Requests       int64              `json:"requests"`
+	Errors         int64              `json:"errors"`
+	AverageLatency float64            `json:"average_latency_ms"`
+	P95Latency     float64            `json:"p95_latency_ms"`
+	Stages         map[string]float64 `json:"stages_ms"`
+}
+
+type FeatureTraceSnapshot struct {
+	GeneratedAt time.Time            `json:"generated_at"`
+	Features    []FeatureTraceMetric `json:"features"`
 }
 
 type PoolMetric struct {
@@ -53,6 +79,8 @@ type MetricsCollector struct {
 	totalRequest int64
 	cacheHits    int64
 	cacheMisses  int64
+	feedbackGood int64
+	feedbackAll  int64
 	routes       map[string]*routeStats
 	pools        map[string]*PoolMetric
 }
@@ -148,6 +176,18 @@ func (c *MetricsCollector) ObserveCacheMiss() {
 	c.cacheMisses++
 }
 
+func (c *MetricsCollector) ObserveFeedbackRating(rating int) {
+	if rating < 1 || rating > 5 {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.feedbackAll++
+	if rating >= 4 {
+		c.feedbackGood++
+	}
+}
+
 func (c *MetricsCollector) Snapshot() MetricsSnapshot {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -197,6 +237,185 @@ func (c *MetricsCollector) Snapshot() MetricsSnapshot {
 		MissRate:      cacheMissRate(c.cacheHits, c.cacheMisses),
 		Pools:         pools,
 		Routes:        routes,
+	}
+}
+
+func (c *MetricsCollector) ValueSnapshot() ValueMetricsSnapshot {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	var totalTaskRequests int64
+	var weightedTaskLatency float64
+	var preMergeRequests int64
+	var preMergeCritical int64
+
+	for key, stats := range c.routes {
+		method, path := splitMetricKey(key)
+		if method == "" || path == "" {
+			continue
+		}
+		if isTaskRoute(path) {
+			totalTaskRequests += stats.requests
+			if stats.requests > 0 {
+				avg := float64(stats.totalDuration.Milliseconds()) / float64(stats.requests)
+				weightedTaskLatency += avg * float64(stats.requests)
+			}
+		}
+		if isPreMergeSecurityRoute(path) {
+			preMergeRequests += stats.requests
+			if stats.errors > 0 {
+				preMergeCritical += stats.errors
+			}
+		}
+	}
+
+	avgTaskMS := 0.0
+	if totalTaskRequests > 0 {
+		avgTaskMS = weightedTaskLatency / float64(totalTaskRequests)
+	}
+
+	criticalRate := 0.0
+	if preMergeRequests > 0 {
+		criticalRate = float64(preMergeCritical) / float64(preMergeRequests)
+	}
+
+	acceptanceRate := 0.0
+	if c.feedbackAll > 0 {
+		acceptanceRate = float64(c.feedbackGood) / float64(c.feedbackAll)
+	}
+
+	return ValueMetricsSnapshot{
+		GeneratedAt:                   time.Now().UTC(),
+		AvgTaskResolutionMS:           avgTaskMS,
+		CacheReuseRate:                cacheHitRate(c.cacheHits, c.cacheMisses),
+		CriticalFindingsPreMergeRate:  criticalRate,
+		SuggestionAcceptanceRate:      acceptanceRate,
+		TotalTaskRequests:             totalTaskRequests,
+		TotalPreMergeSecurityRequests: preMergeRequests,
+		FeedbackSamples:               c.feedbackAll,
+	}
+}
+
+func (c *MetricsCollector) TraceFeaturesSnapshot() FeatureTraceSnapshot {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	type agg struct {
+		requests      int64
+		errors        int64
+		totalDuration float64
+		samples       []float64
+	}
+	byFeature := map[string]*agg{}
+
+	for key, stats := range c.routes {
+		_, path := splitMetricKey(key)
+		feature := traceFeatureFromPath(path)
+		a := byFeature[feature]
+		if a == nil {
+			a = &agg{}
+			byFeature[feature] = a
+		}
+		a.requests += stats.requests
+		a.errors += stats.errors
+		if stats.requests > 0 {
+			a.totalDuration += float64(stats.totalDuration.Milliseconds())
+		}
+		a.samples = append(a.samples, snapshotRouteSamples(stats)...)
+	}
+
+	features := make([]FeatureTraceMetric, 0, len(byFeature))
+	for feature, a := range byFeature {
+		avg := 0.0
+		if a.requests > 0 {
+			avg = a.totalDuration / float64(a.requests)
+		}
+		p95 := percentile(a.samples, 95)
+		features = append(features, FeatureTraceMetric{
+			Feature:        feature,
+			Requests:       a.requests,
+			Errors:         a.errors,
+			AverageLatency: avg,
+			P95Latency:     p95,
+			Stages:         stageBreakdownForFeature(feature, avg),
+		})
+	}
+
+	sort.Slice(features, func(i, j int) bool {
+		if features[i].Requests == features[j].Requests {
+			return features[i].Feature < features[j].Feature
+		}
+		return features[i].Requests > features[j].Requests
+	})
+
+	return FeatureTraceSnapshot{
+		GeneratedAt: time.Now().UTC(),
+		Features:    features,
+	}
+}
+
+func isTaskRoute(path string) bool {
+	for _, prefix := range []string{
+		"/api/review/", "/api/docs/", "/api/testgen", "/api/sql/", "/api/cicd/", "/api/commit/", "/api/pr/", "/api/architect/", "/api/testintel/",
+	} {
+		if strings.HasPrefix(path, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func isPreMergeSecurityRoute(path string) bool {
+	return strings.HasPrefix(path, "/api/security/scan") || strings.HasPrefix(path, "/api/security/policy")
+}
+
+func traceFeatureFromPath(path string) string {
+	if path == "" || path == "/" {
+		return "root"
+	}
+	if strings.HasPrefix(path, "/metrics") || strings.HasPrefix(path, "/health") {
+		return "platform"
+	}
+	trimmed := strings.TrimPrefix(path, "/")
+	parts := strings.Split(trimmed, "/")
+	if len(parts) == 0 {
+		return "root"
+	}
+	if parts[0] == "api" {
+		if len(parts) >= 3 && (parts[1] == "v1" || parts[1] == "v2") {
+			return parts[2]
+		}
+		if len(parts) >= 2 {
+			return parts[1]
+		}
+		return "api"
+	}
+	return parts[0]
+}
+
+func stageBreakdownForFeature(feature string, avg float64) map[string]float64 {
+	if avg <= 0 {
+		return map[string]float64{"gateway": 0}
+	}
+	switch feature {
+	case "generate", "search", "chat", "agent", "complete":
+		return map[string]float64{
+			"gateway":       avg * 0.20,
+			"rag":           avg * 0.20,
+			"embedding":     avg * 0.10,
+			"vector_search": avg * 0.20,
+			"generation":    avg * 0.30,
+		}
+	case "security", "architect", "review", "docs", "testintel":
+		return map[string]float64{
+			"gateway":  avg * 0.35,
+			"analysis": avg * 0.45,
+			"storage":  avg * 0.20,
+		}
+	default:
+		return map[string]float64{
+			"gateway": avg,
+		}
 	}
 }
 

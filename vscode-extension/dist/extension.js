@@ -38,9 +38,7 @@ exports.deactivate = deactivate;
 const path = __importStar(require("path"));
 const vscode = __importStar(require("vscode"));
 const node_1 = require("vscode-languageclient/node");
-// Reuse existing JS extension features while migrating to TypeScript entrypoint.
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const legacy = require('../extension.js');
+let legacy;
 let client;
 function startLsp(context) {
     const serverModule = context.asAbsolutePath(path.join('dist', 'lspServer.js'));
@@ -66,18 +64,54 @@ function startLsp(context) {
     client.start();
     context.subscriptions.push({ dispose: () => { void client?.stop(); } });
 }
-function activate(context) {
-    if (typeof legacy.activate === 'function') {
-        legacy.activate(context);
+async function activate(context) {
+    const output = vscode.window.createOutputChannel('Copilot Local');
+    context.subscriptions.push(output);
+    const openChatStable = vscode.commands.registerCommand('copilot-local.openChat', async () => {
+        try {
+            await vscode.commands.executeCommand('copilot-local.openChatLegacy');
+        }
+        catch (err) {
+            const details = err instanceof Error ? (err.stack || err.message) : String(err);
+            output.appendLine('[openChat][stable-fallback] ' + details);
+            const panel = vscode.window.createWebviewPanel('copilotLocalChatFallback', 'Copilot Local Chat', vscode.ViewColumn.Beside, { enableScripts: false, retainContextWhenHidden: true });
+            panel.webview.html = `<!doctype html><html><body style="font-family: var(--vscode-font-family); padding: 16px;">
+<h3>Copilot Local - Safe Mode</h3>
+<p>No se pudo abrir el chat legacy.</p>
+<p>Revisa Output: <strong>Copilot Local</strong>.</p>
+<pre style="white-space: pre-wrap;">${details.replace(/[<&>]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c] || c))}</pre>
+</body></html>`;
+        }
+    });
+    context.subscriptions.push(openChatStable);
+    try {
+        // Reuse existing JS extension features while migrating to TypeScript entrypoint.
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        legacy = require('../extension.js');
+        if (typeof legacy.activate === 'function') {
+            await legacy.activate(context);
+        }
     }
-    startLsp(context);
+    catch (err) {
+        const details = err instanceof Error ? (err.stack || err.message) : String(err);
+        output.appendLine('[activate][legacy-error] ' + details);
+        void vscode.window.showWarningMessage('Copilot Local loaded in safe mode (legacy module failed).');
+    }
+    try {
+        startLsp(context);
+    }
+    catch (err) {
+        const details = err instanceof Error ? (err.stack || err.message) : String(err);
+        output.appendLine('[activate][lsp-error] ' + details);
+        void vscode.window.showWarningMessage('Copilot Local: LSP no pudo iniciar (chat sigue disponible).');
+    }
 }
 async function deactivate() {
     if (client) {
         await client.stop();
         client = undefined;
     }
-    if (typeof legacy.deactivate === 'function') {
+    if (legacy && typeof legacy.deactivate === 'function') {
         await legacy.deactivate();
     }
 }

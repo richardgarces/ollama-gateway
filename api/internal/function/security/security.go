@@ -1,11 +1,13 @@
 package service
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -27,6 +29,32 @@ type securityFileCandidate struct {
 	size       int64
 	complexity int
 	score      int64
+}
+
+type SecretFinding struct {
+	Severity    string `json:"severity"`
+	Kind        string `json:"kind"`
+	Path        string `json:"path"`
+	Line        int    `json:"line"`
+	Description string `json:"description"`
+	Snippet     string `json:"snippet,omitempty"`
+}
+
+type SecretScanReport struct {
+	ScannedFiles int             `json:"scanned_files"`
+	TotalFinding int             `json:"total_findings"`
+	ByLevel      map[string]int  `json:"findings_by_level"`
+	Findings     []SecretFinding `json:"findings"`
+	GeneratedAt  time.Time       `json:"generated_at"`
+}
+
+type PolicyDecision struct {
+	Action              string   `json:"action"`
+	Allowed             bool     `json:"allowed"`
+	Reasons             []string `json:"reasons"`
+	SecurityFindings    int      `json:"security_findings"`
+	SecretFindings      int      `json:"secret_findings"`
+	HighOrCriticalCount int      `json:"high_or_critical_count"`
 }
 
 func NewSecurityService(rag domain.RAGEngine, repoRoot string, logger *slog.Logger) *SecurityService {
@@ -133,6 +161,124 @@ func (s *SecurityService) ScanRepo() (domain.SecurityReport, error) {
 		s.logger.Warn("scan de seguridad parcial", slog.Int("file_errors", len(fileErrors)))
 	}
 	return report, nil
+}
+
+func (s *SecurityService) ScanSecretsRepo() (SecretScanReport, error) {
+	files, err := s.selectTopSecurityFiles(48)
+	if err != nil {
+		return SecretScanReport{}, err
+	}
+
+	type secretPattern struct {
+		kind        string
+		severity    string
+		description string
+		re          *regexp.Regexp
+	}
+	patterns := []secretPattern{
+		{kind: "aws_access_key", severity: "critical", description: "AWS access key detectada", re: regexp.MustCompile(`AKIA[0-9A-Z]{16}`)},
+		{kind: "github_pat", severity: "high", description: "GitHub token detectado", re: regexp.MustCompile(`gh[pousr]_[A-Za-z0-9_]{20,}`)},
+		{kind: "generic_secret", severity: "high", description: "Posible secreto hardcodeado", re: regexp.MustCompile(`(?i)(api[_-]?key|secret|token|password)\s*[:=]\s*["'][^"']{8,}["']`)},
+	}
+
+	findings := make([]SecretFinding, 0, 64)
+	counts := map[string]int{"critical": 0, "high": 0, "medium": 0, "low": 0}
+
+	for _, candidate := range files {
+		if strings.HasSuffix(strings.ToLower(candidate.path), ".md") {
+			continue
+		}
+		f, openErr := os.Open(candidate.path)
+		if openErr != nil {
+			continue
+		}
+		scanner := bufio.NewScanner(f)
+		lineNumber := 0
+		for scanner.Scan() {
+			lineNumber++
+			line := scanner.Text()
+			for _, p := range patterns {
+				if p.re.MatchString(line) {
+					snippet := strings.TrimSpace(line)
+					if len(snippet) > 180 {
+						snippet = snippet[:180] + "..."
+					}
+					findings = append(findings, SecretFinding{
+						Severity:    p.severity,
+						Kind:        p.kind,
+						Path:        s.relativePath(candidate.path),
+						Line:        lineNumber,
+						Description: p.description,
+						Snippet:     snippet,
+					})
+					counts[p.severity]++
+				}
+			}
+		}
+		_ = f.Close()
+	}
+
+	sort.SliceStable(findings, func(i, j int) bool {
+		if findings[i].Severity != findings[j].Severity {
+			return findings[i].Severity < findings[j].Severity
+		}
+		if findings[i].Path != findings[j].Path {
+			return findings[i].Path < findings[j].Path
+		}
+		return findings[i].Line < findings[j].Line
+	})
+
+	return SecretScanReport{
+		ScannedFiles: len(files),
+		TotalFinding: len(findings),
+		ByLevel:      counts,
+		Findings:     findings,
+		GeneratedAt:  time.Now().UTC(),
+	}, nil
+}
+
+func (s *SecurityService) EvaluatePolicy(action string) (PolicyDecision, error) {
+	action = strings.TrimSpace(strings.ToLower(action))
+	if action == "" {
+		return PolicyDecision{}, fmt.Errorf("action es requerida")
+	}
+
+	securityReport, err := s.ScanRepo()
+	if err != nil {
+		return PolicyDecision{}, err
+	}
+	secretReport, err := s.ScanSecretsRepo()
+	if err != nil {
+		return PolicyDecision{}, err
+	}
+
+	reasons := []string{}
+	allowed := true
+	highOrCritical := securityReport.HighOrCritical + secretReport.ByLevel["high"] + secretReport.ByLevel["critical"]
+
+	if strings.HasSuffix(action, ":apply") || strings.Contains(action, "deploy") || strings.Contains(action, "merge") {
+		if securityReport.HighOrCritical > 0 {
+			allowed = false
+			reasons = append(reasons, "findings de seguridad high/critical detectados")
+		}
+		if secretReport.ByLevel["critical"] > 0 || secretReport.ByLevel["high"] > 0 {
+			allowed = false
+			reasons = append(reasons, "se detectaron secretos potenciales en el repositorio")
+		}
+	}
+
+	if len(reasons) == 0 {
+		reasons = append(reasons, "policy checks sin bloqueos para la acción solicitada")
+	}
+
+	return PolicyDecision{
+		Action:              action,
+		Allowed:             allowed,
+		Reasons:             reasons,
+		SecurityFindings:    securityReport.TotalFindings,
+		SecretFindings:      secretReport.TotalFinding,
+		HighOrCriticalCount: highOrCritical,
+	}, nil
 }
 
 func IsHighSeverity(severity string) bool {

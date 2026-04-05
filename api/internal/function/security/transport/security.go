@@ -19,6 +19,10 @@ type securityScanFileRequest struct {
 	Path string `json:"path"`
 }
 
+type policyEvaluateRequest struct {
+	Action string `json:"action"`
+}
+
 func NewSecurityHandler(securityService *securityservice.SecurityService) *SecurityHandler {
 	return &SecurityHandler{securityService: securityService}
 }
@@ -60,6 +64,34 @@ func (h *SecurityHandler) ScanRepo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.WriteJSON(w, http.StatusOK, report)
+}
+
+func (h *SecurityHandler) ScanSecretsRepo(w http.ResponseWriter, r *http.Request) {
+	report, err := h.securityService.ScanSecretsRepo()
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	httputil.WriteJSON(w, http.StatusOK, report)
+}
+
+func (h *SecurityHandler) EvaluatePolicy(w http.ResponseWriter, r *http.Request) {
+	var req policyEvaluateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, "body inválido: "+err.Error())
+		return
+	}
+	if strings.TrimSpace(req.Action) == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "action es requerida")
+		return
+	}
+
+	decision, err := h.securityService.EvaluatePolicy(req.Action)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	httputil.WriteJSON(w, http.StatusOK, decision)
 }
 
 func (h *SecurityHandler) writeServiceError(w http.ResponseWriter, err error) {

@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"unicode"
 )
@@ -24,6 +25,13 @@ type Runbook struct {
 	Recommendations        []string `json:"recommendations"`
 	Applied                bool     `json:"applied"`
 	MarkdownPath           string   `json:"markdown_path,omitempty"`
+	Markdown               string   `json:"markdown,omitempty"`
+}
+
+type RunbookSummary struct {
+	IncidentType string `json:"incident_type"`
+	Title        string `json:"title"`
+	MarkdownPath string `json:"markdown_path"`
 }
 
 func NewService(repoRoot string, logger *slog.Logger) *Service {
@@ -116,6 +124,114 @@ func (s *Service) SaveRunbook(runbook Runbook) (string, error) {
 	}
 
 	return relPath, nil
+}
+
+func (s *Service) ListRunbooks(incidentType string) ([]RunbookSummary, error) {
+	rootAbs, err := filepath.Abs(strings.TrimSpace(s.repoRoot))
+	if err != nil {
+		return nil, fmt.Errorf("REPO_ROOT invalido: %w", err)
+	}
+	docsDir := filepath.Join(rootAbs, "docs", "runbooks")
+	entries, err := os.ReadDir(docsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []RunbookSummary{}, nil
+		}
+		return nil, fmt.Errorf("no se pudo listar runbooks: %w", err)
+	}
+
+	filter := sanitizeIncidentType(incidentType)
+	out := make([]RunbookSummary, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if strings.ToLower(filepath.Ext(name)) != ".md" {
+			continue
+		}
+		incident := strings.TrimSuffix(name, filepath.Ext(name))
+		if filter != "" && incident != filter {
+			continue
+		}
+		title, titleErr := s.readRunbookTitle(filepath.Join(docsDir, name))
+		if titleErr != nil {
+			title = "Runbook - " + incident
+		}
+		out = append(out, RunbookSummary{
+			IncidentType: incident,
+			Title:        title,
+			MarkdownPath: filepath.ToSlash(filepath.Join("docs", "runbooks", name)),
+		})
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].IncidentType < out[j].IncidentType
+	})
+	return out, nil
+}
+
+func (s *Service) GetRunbook(incidentType string) (Runbook, error) {
+	incident := sanitizeIncidentType(incidentType)
+	if incident == "" {
+		return Runbook{}, fmt.Errorf("incident_type invalido")
+	}
+
+	rootAbs, err := filepath.Abs(strings.TrimSpace(s.repoRoot))
+	if err != nil {
+		return Runbook{}, fmt.Errorf("REPO_ROOT invalido: %w", err)
+	}
+	path := filepath.Join(rootAbs, "docs", "runbooks", incident+".md")
+	pathAbs, err := filepath.Abs(path)
+	if err != nil {
+		return Runbook{}, fmt.Errorf("no se pudo resolver runbook: %w", err)
+	}
+	if pathAbs != rootAbs && !strings.HasPrefix(pathAbs, rootAbs+string(os.PathSeparator)) {
+		return Runbook{}, fmt.Errorf("ruta fuera de REPO_ROOT")
+	}
+
+	content, err := os.ReadFile(pathAbs)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return Runbook{}, fmt.Errorf("runbook no encontrado")
+		}
+		return Runbook{}, fmt.Errorf("no se pudo leer runbook: %w", err)
+	}
+
+	title := "Runbook - " + incident
+	if parsed := parseTitleFromMarkdown(string(content)); parsed != "" {
+		title = parsed
+	}
+
+	return Runbook{
+		IncidentType: incident,
+		Title:        title,
+		Applied:      true,
+		MarkdownPath: filepath.ToSlash(filepath.Join("docs", "runbooks", incident+".md")),
+		Markdown:     string(content),
+	}, nil
+}
+
+func (s *Service) readRunbookTitle(path string) (string, error) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	title := parseTitleFromMarkdown(string(content))
+	if title == "" {
+		return "", fmt.Errorf("titulo no encontrado")
+	}
+	return title, nil
+}
+
+func parseTitleFromMarkdown(markdown string) string {
+	for _, line := range strings.Split(markdown, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "# ") {
+			return strings.TrimSpace(strings.TrimPrefix(trimmed, "# "))
+		}
+	}
+	return ""
 }
 
 func (s *Service) resolveRunbookPath(incidentType string) (string, string, error) {

@@ -202,6 +202,42 @@ func TestMetricsAndRateLimit(t *testing.T) {
 	_ = json.Unmarshal(w.Body.Bytes(), &body)
 }
 
+func TestTenantMiddleware(t *testing.T) {
+	h := Tenant(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if TenantFromContext(r.Context()) != "acme" {
+			t.Fatalf("expected tenant acme")
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	r := httptest.NewRequest(http.MethodGet, "/x", nil)
+	r.Header.Set("X-Tenant-ID", "acme")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200")
+	}
+	if w.Header().Get("X-Tenant-ID") != "acme" {
+		t.Fatalf("expected X-Tenant-ID response header")
+	}
+}
+
+func TestTenantMiddlewareDefault(t *testing.T) {
+	h := Tenant(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if TenantFromContext(r.Context()) != "default" {
+			t.Fatalf("expected default tenant")
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	r := httptest.NewRequest(http.MethodGet, "/x", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("expected status 204")
+	}
+}
+
 func signedTokenForTest(t *testing.T, secret []byte, claims map[string]interface{}) string {
 	t.Helper()
 	tok := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims(claims))

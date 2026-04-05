@@ -59,3 +59,31 @@ func (h *ArchitectHandler) SuggestRefactor(w http.ResponseWriter, r *http.Reques
 
 	httputil.WriteJSON(w, http.StatusOK, map[string]string{"refactor_suggestion": result})
 }
+
+func (h *ArchitectHandler) DetectPatterns(w http.ResponseWriter, r *http.Request) {
+	var req archRefactorRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, "body inválido: "+err.Error())
+		return
+	}
+	if strings.TrimSpace(req.Path) == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "path requerido")
+		return
+	}
+
+	report, err := h.svc.DetectPatternRefactors(req.Path)
+	if err != nil {
+		msg := err.Error()
+		switch {
+		case strings.Contains(strings.ToLower(msg), "path") || strings.Contains(msg, "REPO_ROOT"):
+			httputil.WriteError(w, http.StatusBadRequest, msg)
+		case errors.Is(err, os.ErrNotExist):
+			httputil.WriteError(w, http.StatusNotFound, "archivo no encontrado")
+		default:
+			httputil.WriteError(w, http.StatusInternalServerError, msg)
+		}
+		return
+	}
+
+	httputil.WriteJSON(w, http.StatusOK, report)
+}

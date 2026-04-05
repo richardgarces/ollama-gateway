@@ -39,6 +39,30 @@ func TestMetricsCollectorSnapshot(t *testing.T) {
 	}
 }
 
+func TestTraceFeaturesSnapshot(t *testing.T) {
+	m := NewMetricsCollector()
+	m.Observe("POST", "/api/v1/generate", 200, 50*time.Millisecond)
+	m.Observe("POST", "/api/v1/generate", 500, 70*time.Millisecond)
+	m.Observe("POST", "/api/security/scan/repo", 200, 30*time.Millisecond)
+
+	s := m.TraceFeaturesSnapshot()
+	if len(s.Features) == 0 {
+		t.Fatalf("expected feature traces")
+	}
+	found := false
+	for _, f := range s.Features {
+		if f.Feature == "generate" {
+			found = true
+			if f.Requests < 2 {
+				t.Fatalf("expected generate requests >=2")
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected generate feature in snapshot")
+	}
+}
+
 func TestLogStream(t *testing.T) {
 	ls := NewLogStream(2)
 	ch, unsub := ls.Subscribe()

@@ -7,13 +7,12 @@ import (
 	"time"
 
 	archdomain "ollama-gateway/internal/function/core/domain"
-	securitydomain "ollama-gateway/internal/function/security/domain"
 )
 
 type fakeSecurityScanner struct{}
 
-func (f *fakeSecurityScanner) ScanRepo() (securitydomain.SecurityReport, error) {
-	return securitydomain.SecurityReport{ScannedFiles: 3, TotalFindings: 2}, nil
+func (f *fakeSecurityScanner) ScanRepo() (archdomain.SecurityReport, error) {
+	return archdomain.SecurityReport{ScannedFiles: 3, TotalFindings: 2}, nil
 }
 
 type fakeDocGen struct{}
@@ -69,7 +68,7 @@ func TestJobsServiceCreateAndGetResult(t *testing.T) {
 	if status != JobStatusSucceeded {
 		t.Fatalf("expected succeeded status, got %s", status)
 	}
-	report, ok := result.(securitydomain.SecurityReport)
+	report, ok := result.(archdomain.SecurityReport)
 	if !ok {
 		t.Fatalf("expected SecurityReport result, got %T", result)
 	}
@@ -81,13 +80,12 @@ func TestJobsServiceCreateAndGetResult(t *testing.T) {
 func TestJobsServiceCancelQueuedJob(t *testing.T) {
 	idx := &blockingIndexer{started: make(chan struct{}), release: make(chan struct{})}
 	svc := NewService(Dependencies{
-		Workers:  1,
+		Workers:   1,
 		QueueSize: 8,
-		Indexer:  idx,
-		Security: &fakeSecurityScanner{},
+		Indexer:   idx,
+		Security:  &fakeSecurityScanner{},
 	})
 	t.Cleanup(func() {
-		close(idx.release)
 		_ = svc.Shutdown(context.Background())
 	})
 

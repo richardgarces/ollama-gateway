@@ -97,6 +97,103 @@ func (s *ArchitectService) SuggestRefactor(path string) (string, error) {
 	return strings.TrimSpace(stripMarkdownFence(out)), nil
 }
 
+func (s *ArchitectService) DetectPatternRefactors(path string) (domain.PatternReport, error) {
+	absPath, err := s.resolveWithinRepo(path)
+	if err != nil {
+		return domain.PatternReport{}, err
+	}
+	data, err := os.ReadFile(absPath)
+	if err != nil {
+		return domain.PatternReport{}, err
+	}
+
+	content := string(data)
+	lines := strings.Split(content, "\n")
+	errChecks := strings.Count(content, "if err != nil")
+	fmtPrints := strings.Count(content, "fmt.Println(") + strings.Count(content, "fmt.Printf(")
+	todos := strings.Count(strings.ToLower(content), "todo")
+
+	suggestions := make([]domain.PatternSuggestion, 0, 6)
+	risk := 10
+
+	if len(lines) > 350 {
+		risk += 25
+		suggestions = append(suggestions, domain.PatternSuggestion{
+			Pattern:    "long-file",
+			Severity:   "high",
+			Reason:     "archivo con más de 350 líneas",
+			Suggestion: "separar responsabilidades en servicios/helpers por dominio",
+			DiffHint:   "extraer bloques cohesivos a archivos nuevos con interfaces explícitas",
+		})
+	}
+	if errChecks >= 8 {
+		risk += 20
+		suggestions = append(suggestions, domain.PatternSuggestion{
+			Pattern:    "repeated-error-handling",
+			Severity:   "medium",
+			Reason:     "múltiples bloques repetidos de manejo de error",
+			Suggestion: "centralizar validaciones/errores en helpers para reducir duplicidad",
+			DiffHint:   "crear helper `wrapErr(op, err)` o función de guard clause común",
+		})
+	}
+	if fmtPrints > 0 {
+		risk += 15
+		suggestions = append(suggestions, domain.PatternSuggestion{
+			Pattern:    "stdout-logging",
+			Severity:   "medium",
+			Reason:     "uso de fmt.Print* en flujo de aplicación",
+			Suggestion: "usar logger estructurado para trazabilidad y correlación",
+			DiffHint:   "reemplazar fmt.Print* por slog.(Debug|Info|Warn|Error)",
+		})
+	}
+	if todos > 0 {
+		risk += 8
+		suggestions = append(suggestions, domain.PatternSuggestion{
+			Pattern:    "todo-markers",
+			Severity:   "low",
+			Reason:     "hay marcadores TODO pendientes",
+			Suggestion: "crear backlog técnico con prioridad y owner por TODO",
+		})
+	}
+	if strings.Contains(content, "panic(") {
+		risk += 20
+		suggestions = append(suggestions, domain.PatternSuggestion{
+			Pattern:    "panic-in-runtime",
+			Severity:   "high",
+			Reason:     "uso de panic en código de runtime",
+			Suggestion: "propagar errores y responder con manejo controlado",
+			DiffHint:   "reemplazar panic(...) por return err y manejo en capa superior",
+		})
+	}
+
+	if len(suggestions) == 0 {
+		suggestions = append(suggestions, domain.PatternSuggestion{
+			Pattern:    "no-critical-smells",
+			Severity:   "low",
+			Reason:     "no se detectaron patrones críticos con heurística local",
+			Suggestion: "mantener revisión incremental y pruebas de regresión",
+		})
+		risk = 12
+	}
+
+	if risk > 100 {
+		risk = 100
+	}
+	level := "low"
+	if risk >= 70 {
+		level = "high"
+	} else if risk >= 40 {
+		level = "medium"
+	}
+
+	return domain.PatternReport{
+		Path:        s.relativePath(absPath),
+		RiskScore:   risk,
+		RiskLevel:   level,
+		Suggestions: suggestions,
+	}, nil
+}
+
 func parseArchReport(raw string) (domain.ArchReport, error) {
 	text := strings.TrimSpace(raw)
 	if text == "" {

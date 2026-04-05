@@ -58,3 +58,42 @@ func (h *Handler) Generate(w http.ResponseWriter, r *http.Request) {
 
 	httputil.WriteJSON(w, http.StatusOK, runbook)
 }
+
+func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
+	if h == nil || h.svc == nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "runbook service no disponible")
+		return
+	}
+
+	incidentType := strings.TrimSpace(r.URL.Query().Get("incident_type"))
+	runbooks, err := h.svc.ListRunbooks(incidentType)
+	if err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	httputil.WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"count":    len(runbooks),
+		"runbooks": runbooks,
+	})
+}
+
+func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
+	if h == nil || h.svc == nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "runbook service no disponible")
+		return
+	}
+
+	incidentType := strings.TrimSpace(r.PathValue("incident_type"))
+	runbook, err := h.svc.GetRunbook(incidentType)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "no encontrado") {
+			httputil.WriteError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		httputil.WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	httputil.WriteJSON(w, http.StatusOK, runbook)
+}

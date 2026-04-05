@@ -2,7 +2,9 @@ package transport
 
 import (
 	"context"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -15,6 +17,8 @@ import (
 type HealthHandler struct {
 	ollamaURL string
 	qdrantURL string
+	mongoURI  string
+	redisURL  string
 	client    *http.Client
 	ollamaCB  breakerStateProvider
 	qdrantCB  breakerStateProvider
@@ -32,6 +36,8 @@ type dependencyStatus struct {
 type dependenciesStatus struct {
 	Ollama dependencyStatus `json:"ollama"`
 	Qdrant dependencyStatus `json:"qdrant"`
+	Mongo  dependencyStatus `json:"mongo"`
+	Redis  dependencyStatus `json:"redis"`
 }
 
 type readinessResponse struct {
@@ -52,6 +58,8 @@ func NewHealthHandler(cfg *config.Config) *HealthHandler {
 	if cfg != nil {
 		h.ollamaURL = cfg.OllamaURL
 		h.qdrantURL = cfg.QdrantURL
+		h.mongoURI = cfg.MongoURI
+		h.redisURL = cfg.RedisURL
 	}
 	return h
 }
@@ -71,9 +79,8 @@ func (h *HealthHandler) SetCircuitBreakers(ollama, qdrant breakerStateProvider) 
 func (h *HealthHandler) Readiness(w http.ResponseWriter, r *http.Request) {
 	deps := dependenciesStatus{}
 
-	// TODO: agregar ping de MongoDB con timeout de 2s cuando se integre esa dependencia.
 	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(4)
 
 	go func() {
 		defer wg.Done()
@@ -85,6 +92,16 @@ func (h *HealthHandler) Readiness(w http.ResponseWriter, r *http.Request) {
 		deps.Qdrant = h.checkDependency(r.Context(), h.qdrantURL)
 	}()
 
+	go func() {
+		defer wg.Done()
+		deps.Mongo = h.checkTCPDependency(r.Context(), h.mongoURI, "mongodb")
+	}()
+
+	go func() {
+		defer wg.Done()
+		deps.Redis = h.checkTCPDependency(r.Context(), h.redisURL, "redis")
+	}()
+
 	wg.Wait()
 
 	healthyCount := 0
@@ -94,10 +111,16 @@ func (h *HealthHandler) Readiness(w http.ResponseWriter, r *http.Request) {
 	if deps.Qdrant.Status == "healthy" {
 		healthyCount++
 	}
+	if deps.Mongo.Status == "healthy" {
+		healthyCount++
+	}
+	if deps.Redis.Status == "healthy" {
+		healthyCount++
+	}
 
 	status := "degraded"
 	switch healthyCount {
-	case 2:
+	case 4:
 		status = "healthy"
 	case 0:
 		status = "unhealthy"
@@ -119,6 +142,66 @@ func (h *HealthHandler) Readiness(w http.ResponseWriter, r *http.Request) {
 		Dependencies: deps,
 		Breakers:     breakers,
 	})
+}
+
+func (h *HealthHandler) checkTCPDependency(parentCtx context.Context, rawURL, schemeHint string) dependencyStatus {
+	hostPort := hostPortFromRaw(rawURL, schemeHint)
+	if hostPort == "" {
+		return dependencyStatus{Status: "unhealthy", LatencyMS: 0}
+	}
+	ctx, cancel := context.WithTimeout(parentCtx, 2*time.Second)
+	defer cancel()
+	start := time.Now()
+	dialer := &net.Dialer{}
+	conn, err := dialer.DialContext(ctx, "tcp", hostPort)
+	latency := time.Since(start).Milliseconds()
+	if err != nil {
+		return dependencyStatus{Status: "unhealthy", LatencyMS: latency}
+	}
+	_ = conn.Close()
+	return dependencyStatus{Status: "healthy", LatencyMS: latency}
+}
+
+func hostPortFromRaw(rawURL, schemeHint string) string {
+	trimmed := strings.TrimSpace(rawURL)
+	if trimmed == "" {
+		return ""
+	}
+	if !strings.Contains(trimmed, "://") {
+		trimmed = schemeHint + "://" + trimmed
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil {
+		return ""
+	}
+	if parsed.Scheme == "mongodb" || parsed.Scheme == "mongodb+srv" {
+		hosts := strings.Split(parsed.Host, ",")
+		first := strings.TrimSpace(hosts[0])
+		if first == "" {
+			return ""
+		}
+		if strings.Contains(first, ":") {
+			return first
+		}
+		return first + ":27017"
+	}
+	host := parsed.Host
+	if host == "" {
+		return ""
+	}
+	if strings.Contains(host, ":") {
+		return host
+	}
+	switch parsed.Scheme {
+	case "redis":
+		return host + ":6379"
+	case "http":
+		return host + ":80"
+	case "https":
+		return host + ":443"
+	default:
+		return host
+	}
 }
 
 func (h *HealthHandler) checkDependency(parentCtx context.Context, rawURL string) dependencyStatus {

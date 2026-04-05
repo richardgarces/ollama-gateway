@@ -34,11 +34,15 @@ func TestGetRouteDefinitions(t *testing.T) {
 		"GET /health",
 		"POST /api/generate",
 		"POST /api/flags",
+		"GET /api/tenant/context",
 		"GET /api/flags",
 		"GET /api/flags/{feature}",
 		"PUT /api/flags/{feature}",
 		"DELETE /api/flags/{feature}",
 		"POST /api/runbooks/generate",
+		"GET /api/runbooks",
+		"GET /api/runbooks/{incident_type}",
+		"POST /api/testintel/prioritize",
 		"POST /api/sql/review",
 		"GET /api/perf/endpoints",
 		"GET /api/gate/deploy",
@@ -46,6 +50,15 @@ func TestGetRouteDefinitions(t *testing.T) {
 		"POST /api/pr/summary",
 		"POST /api/commit/message",
 		"GET /api/audit/events",
+		"POST /api/jobs",
+		"GET /api/jobs/{id}",
+		"POST /api/jobs/{id}/cancel",
+		"GET /api/jobs/{id}/result",
+		"POST /api/architect/patterns",
+		"POST /api/security/scan/secrets",
+		"POST /api/security/policy/evaluate",
+		"GET /api/spec",
+		"GET /metrics/traces/features",
 		"POST /api/admin/config/reload",
 		"GET /api-docs",
 	}
@@ -70,7 +83,7 @@ func TestServerPublicRoutes(t *testing.T) {
 	s := New(cfg, cache.NewMemory())
 	h := s.Handler()
 
-	for _, path := range []string{"/health", "/health/liveness", "/health/readiness", "/metrics"} {
+	for _, path := range []string{"/health", "/health/liveness", "/health/readiness", "/metrics", "/metrics/value", "/metrics/traces/features"} {
 		r := httptest.NewRequest(http.MethodGet, path, nil)
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, r)

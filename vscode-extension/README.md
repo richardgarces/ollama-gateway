@@ -7,7 +7,7 @@ Extensión VS Code que se conecta al gateway local para chat/completions y featu
 | Comando | Atajo | Descripción |
 |---------|-------|-------------|
 | **Copilot Local: Send Selection** | `Cmd+Shift+L` | Envía la selección (o documento completo) al gateway y muestra la respuesta streaming en el Output Channel |
-| **Copilot Local: Open Chat Panel** | `Cmd+Shift+K` | Abre un panel lateral de chat con UI interactiva |
+| **Copilot Local: Open Chat Panel** | `Cmd+Alt+K` | Abre un panel lateral de chat con UI interactiva |
 | **Copilot Local: Quick Prompt** | - | Abre plantillas rápidas y las inserta en el input del chat usando la selección activa |
 | **Copilot Local: Search Chat History** | - | Busca mensajes previos del chat en el workspace y resalta el resultado en el panel |
 | **Copilot Local: Compare Models** | - | Compara la respuesta de dos modelos para el mismo prompt y muestra resultados lado a lado |

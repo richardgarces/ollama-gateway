@@ -940,7 +940,13 @@ function rerenderChatKeepingScroll() {
     d.appendChild(roleEl);
     d.appendChild(contentEl);
     messagesEl.appendChild(d);
-    d.querySelectorAll('pre code').forEach((el) => { try { hljs.highlightElement(el); } catch {} });
+    d.querySelectorAll('pre code').forEach((el) => {
+      try {
+        if (window.hljs && typeof window.hljs.highlightElement === 'function') {
+          window.hljs.highlightElement(el);
+        }
+      } catch {}
+    });
     attachCodeActions(d);
   }
 
@@ -977,7 +983,13 @@ function addMessage(role, text, options = {}) {
   d.appendChild(roleEl);
   d.appendChild(contentEl);
   messagesEl.appendChild(d);
-  d.querySelectorAll('pre code').forEach((el) => { try { hljs.highlightElement(el); } catch {} });
+  d.querySelectorAll('pre code').forEach((el) => {
+    try {
+      if (window.hljs && typeof window.hljs.highlightElement === 'function') {
+        window.hljs.highlightElement(el);
+      }
+    } catch {}
+  });
   attachCodeActions(d);
   chatHistory.push({ id: msgId, role, content: text, timestamp: options.timestamp || Date.now() });
   if (!options.skipSync) scheduleHistorySync();
@@ -1002,7 +1014,13 @@ function updatePending(text) {
       scheduleHistorySync();
     }
   }
-  pending.querySelectorAll('pre code').forEach((el) => { try { hljs.highlightElement(el); } catch {} });
+  pending.querySelectorAll('pre code').forEach((el) => {
+    try {
+      if (window.hljs && typeof window.hljs.highlightElement === 'function') {
+        window.hljs.highlightElement(el);
+      }
+    } catch {}
+  });
   attachCodeActions(pending);
   updateFocusStats();
   messagesEl.scrollTop = messagesEl.scrollHeight;
@@ -1476,7 +1494,11 @@ function activate(context) {
       }
     },
   };
-  context.subscriptions.push(vscode.languages.registerInlineCompletionItemProvider({ pattern: '**' }, inlineProvider));
+  if (vscode.languages && typeof vscode.languages.registerInlineCompletionItemProvider === 'function') {
+    context.subscriptions.push(vscode.languages.registerInlineCompletionItemProvider({ pattern: '**' }, inlineProvider));
+  } else {
+    output.appendLine('[warn] Inline completions API is not available in this VS Code version.');
+  }
 
   const streamWithFallback = (prompt, model, onChunk, onDone) => {
     const abortCtl = new AbortController();
@@ -1636,13 +1658,19 @@ function activate(context) {
       return chatPanel;
     }
 
-    chatPanel = vscode.window.createWebviewPanel('copilotLocalChat', 'Copilot Local Chat', vscode.ViewColumn.Beside, {
-      enableScripts: true,
-      retainContextWhenHidden: true,
-    });
+    try {
+      chatPanel = vscode.window.createWebviewPanel('copilotLocalChat', 'Copilot Local Chat', vscode.ViewColumn.Beside, {
+        enableScripts: true,
+        retainContextWhenHidden: true,
+      });
 
-    const cfg = getConfig();
-    chatPanel.webview.html = getChatPanelHTML(cfg.chatFontSize, cfg.voiceInputEnabled);
+      const cfg = getConfig();
+      chatPanel.webview.html = getChatPanelHTML(cfg.chatFontSize, cfg.voiceInputEnabled);
+    } catch (err) {
+      try { chatPanel?.dispose(); } catch {}
+      chatPanel = null;
+      throw err;
+    }
 
     const publishHistory = () => {
       const restoredState = loadSessionState();
@@ -1899,8 +1927,14 @@ function activate(context) {
     );
   }));
 
-  context.subscriptions.push(vscode.commands.registerCommand('copilot-local.openChat', async () => {
-    await openChatPanel();
+  context.subscriptions.push(vscode.commands.registerCommand('copilot-local.openChatLegacy', async () => {
+    try {
+      await openChatPanel();
+    } catch (err) {
+      const message = err instanceof Error ? (err.stack || err.message) : String(err);
+      output.appendLine('[openChat][error] ' + message);
+      vscode.window.showErrorMessage('Open Chat Panel failed. Revisa Output > Copilot Local para detalles.');
+    }
   }));
 
   context.subscriptions.push(vscode.commands.registerCommand('copilot-local.semanticSearch', async () => {
@@ -2441,6 +2475,122 @@ function activate(context) {
       vscode.window.showWarningMessage('No se pudo setear el input de Source Control automáticamente. Mensaje copiado al portapapeles.');
     } catch (err) {
       vscode.window.showErrorMessage('Commit message generation failed: ' + (err instanceof Error ? err.message : String(err)));
+    }
+  }));
+
+  context.subscriptions.push(vscode.commands.registerCommand('copilot-local.architectReview', async () => {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) {
+      vscode.window.showInformationMessage('No active editor');
+      return;
+    }
+
+    try {
+      const result = await postJSON('/api/architect/patterns', { path: editor.document.fileName });
+      const suggestions = Array.isArray(result?.suggestions) ? result.suggestions : [];
+      const lines = [
+        'Architect Review',
+        'Path: ' + String(result?.path || editor.document.fileName),
+        'Risk: ' + String(result?.risk_level || 'unknown') + ' (' + String(result?.risk_score || 0) + ')',
+        '',
+        'Suggestions:',
+      ];
+      if (suggestions.length === 0) {
+        lines.push('- No suggestions');
+      } else {
+        for (const s of suggestions) {
+          lines.push('- [' + String(s?.severity || 'low') + '] ' + String(s?.pattern || 'pattern') + ': ' + String(s?.suggestion || ''));
+        }
+      }
+
+      const panel = await openChatPanel();
+      panel.webview.postMessage({ type: 'externalResult', text: lines.join('\n') });
+    } catch (err) {
+      vscode.window.showErrorMessage('Architect review failed: ' + (err instanceof Error ? err.message : String(err)));
+    }
+  }));
+
+  context.subscriptions.push(vscode.commands.registerCommand('copilot-local.securityScanCurrentFile', async () => {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) {
+      vscode.window.showInformationMessage('No active editor');
+      return;
+    }
+
+    try {
+      const result = await postJSON('/api/security/scan/file', { path: editor.document.fileName });
+      const findings = Array.isArray(result?.findings) ? result.findings : [];
+      const lines = [
+        'Security Scan - Current File',
+        'Path: ' + String(result?.path || editor.document.fileName),
+        'Findings: ' + String(result?.count || findings.length),
+        '',
+      ];
+      if (findings.length === 0) {
+        lines.push('No findings');
+      } else {
+        for (const f of findings.slice(0, 40)) {
+          lines.push('- [' + String(f?.severity || 'medium') + '] line ' + String(f?.line || 0) + ': ' + String(f?.description || '')); 
+        }
+      }
+      const panel = await openChatPanel();
+      panel.webview.postMessage({ type: 'externalResult', text: lines.join('\n') });
+    } catch (err) {
+      vscode.window.showErrorMessage('Security scan failed: ' + (err instanceof Error ? err.message : String(err)));
+    }
+  }));
+
+  context.subscriptions.push(vscode.commands.registerCommand('copilot-local.generatePipelineAndOpen', async () => {
+    const platformPick = await vscode.window.showQuickPick([
+      { label: 'GitHub Actions', value: 'github-actions' },
+      { label: 'GitLab CI', value: 'gitlab-ci' },
+      { label: 'Jenkins', value: 'jenkins' },
+    ], { title: 'Generate CI/CD Pipeline', placeHolder: 'Select platform' });
+    if (!platformPick) return;
+
+    try {
+      const result = await postJSON('/api/cicd/generate', { platform: platformPick.value, apply: false });
+      const pipeline = String(result?.pipeline || '').trim();
+      if (!pipeline) {
+        vscode.window.showErrorMessage('No pipeline generated');
+        return;
+      }
+      const doc = await vscode.workspace.openTextDocument({ content: pipeline, language: 'yaml' });
+      await vscode.window.showTextDocument(doc, { preview: false, viewColumn: vscode.ViewColumn.Beside });
+      vscode.window.showInformationMessage('Pipeline generado para ' + platformPick.value);
+    } catch (err) {
+      vscode.window.showErrorMessage('Pipeline generation failed: ' + (err instanceof Error ? err.message : String(err)));
+    }
+  }));
+
+  context.subscriptions.push(vscode.commands.registerCommand('copilot-local.createPRSummary', async () => {
+    const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!workspaceFolder) {
+      vscode.window.showErrorMessage('No workspace folder abierto');
+      return;
+    }
+
+    let diff = '';
+    try {
+      diff = await runGitDiffCached(workspaceFolder);
+    } catch (err) {
+      vscode.window.showErrorMessage('No se pudo leer staged diff: ' + (err instanceof Error ? err.message : String(err)));
+      return;
+    }
+    if (!diff.trim()) {
+      vscode.window.showInformationMessage('No hay cambios staged para resumir');
+      return;
+    }
+
+    try {
+      const result = await postJSON('/api/pr/summary', { diff });
+      const text = String(result?.summary || result?.executive_summary || JSON.stringify(result, null, 2)).trim();
+      const panel = await openChatPanel();
+      panel.webview.postMessage({ type: 'externalResult', text: 'PR Summary\n\n' + text });
+      await vscode.env.clipboard.writeText(text);
+      vscode.window.showInformationMessage('PR summary generado y copiado al portapapeles');
+    } catch (err) {
+      vscode.window.showErrorMessage('PR summary failed: ' + (err instanceof Error ? err.message : String(err)));
     }
   }));
 

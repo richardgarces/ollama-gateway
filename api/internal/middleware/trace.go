@@ -22,6 +22,8 @@ func Trace(next http.Handler) http.Handler {
 			oteltrace.WithAttributes(
 				attribute.String("http.method", r.Method),
 				attribute.String("http.path", r.URL.Path),
+				attribute.String("tenant.id", TenantFromContext(r.Context())),
+				attribute.String("feature.name", featureFromPath(r.URL.Path)),
 			),
 		)
 		defer span.End()
@@ -38,4 +40,45 @@ func Trace(next http.Handler) http.Handler {
 
 		prop.Inject(ctx, propagation.HeaderCarrier(rec.Header()))
 	})
+}
+
+func featureFromPath(path string) string {
+	if path == "" || path == "/" {
+		return "root"
+	}
+	if path == "/metrics" || path == "/metrics/prometheus" || path == "/metrics/value" {
+		return "metrics"
+	}
+	trimmed := path
+	if len(trimmed) > 0 && trimmed[0] == '/' {
+		trimmed = trimmed[1:]
+	}
+	parts := splitPath(trimmed)
+	if len(parts) == 0 {
+		return "root"
+	}
+	if parts[0] == "api" {
+		if len(parts) >= 3 && (parts[1] == "v1" || parts[1] == "v2") {
+			return parts[2]
+		}
+		if len(parts) >= 2 {
+			return parts[1]
+		}
+		return "api"
+	}
+	return parts[0]
+}
+
+func splitPath(path string) []string {
+	out := make([]string, 0, 6)
+	start := 0
+	for i := 0; i <= len(path); i++ {
+		if i == len(path) || path[i] == '/' {
+			if i > start {
+				out = append(out, path[start:i])
+			}
+			start = i + 1
+		}
+	}
+	return out
 }
