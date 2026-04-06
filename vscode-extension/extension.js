@@ -2130,7 +2130,40 @@ function activate(context) {
     saveChatHistory(restored.messages).catch(() => {});
   }
 
-  // ── Helpers to send to whichever webview is active (sidebar or panel) ──
+  // ── Agent Tool Registry (Extensibilidad) ──
+  const agentToolRegistry = {};
+
+  /**
+   * Registra una nueva tool para el agente autopilot.
+   * @param {string} name - Nombre único de la tool
+   * @param {function} handler - Función async (args, context) => { ... }
+   * @param {object} [meta] - Metadatos opcionales (description, params, etc)
+   */
+  function registerAgentTool(name, handler, meta = {}) {
+    if (!name || typeof handler !== 'function') throw new Error('registerAgentTool requiere name y handler');
+    agentToolRegistry[name] = { handler, meta };
+  }
+
+  /**
+   * Devuelve la tool registrada o undefined.
+   */
+  function getAgentTool(name) {
+    return agentToolRegistry[name];
+  }
+
+  /**
+   * Lista todas las tools registradas.
+   */
+  function listAgentTools() {
+    return Object.entries(agentToolRegistry).map(([name, { meta }]) => ({ name, ...meta }));
+  }
+
+  // Ejemplo: tool dummy
+  registerAgentTool('echo', async (args) => {
+    return { success: true, output: 'Echo: ' + JSON.stringify(args) };
+  }, { description: 'Devuelve los argumentos recibidos' });
+
+  // ── Helpers to send to whichever webview is active (sidebar o panel) ──
   const getActiveWebview = () => {
     if (chatViewProvider.view) return chatViewProvider.view.webview;
     if (chatPanel) return chatPanel.webview;
@@ -2164,7 +2197,7 @@ function activate(context) {
         model: currentModel,
         lang: cfg.lang,
         temperature: cfg.temperature,
-      },
+      }
     });
     const mStatus = await validateLocalModels();
     webview.postMessage({
@@ -2174,7 +2207,6 @@ function activate(context) {
       source: mStatus.source,
       error: mStatus.error || '',
     });
-  };
 
   const previewAndApplyCode = async (editor, code, languageHint) => {
     const hasSelection = !editor.selection.isEmpty;
@@ -2195,6 +2227,18 @@ function activate(context) {
     if (ok) { try { await vscode.commands.executeCommand('editor.action.formatDocument'); } catch {} }
     return ok;
   };
+
+  // ── AGENT TOOL EXTENSIBILITY: tool-call dispatcher para autopilot ──
+  async function handleAgentToolCall(tool, args, context) {
+    const entry = getAgentTool(tool);
+    if (!entry) return { success: false, output: `[Tool '${tool}' no registrada]` };
+    try {
+      const result = await entry.handler(args, context);
+      return typeof result === 'object' ? result : { success: true, output: String(result) };
+    } catch (err) {
+      return { success: false, output: `[Error en tool '${tool}': ${err.message || err}]` };
+    }
+  }
 
   // ── Workspace context gathering for agent autopilot ──
   const gatherWorkspaceContext = async (extraFiles) => {
@@ -2449,10 +2493,17 @@ function activate(context) {
         if (!task) { webview.postMessage({ type: 'agentError', text: 'Tarea vacía' }); return; }
         const wsContext = await gatherWorkspaceContext(extraFiles);
         streamAgentAutopilot(task, model, wsContext,
-          (ev) => {
+          async (ev) => {
             if (ev.event === 'thinking') webview.postMessage({ type: 'agentThinking', iteration: ev.iteration, content: ev.content });
-            else if (ev.event === 'tool_call') webview.postMessage({ type: 'agentToolCall', iteration: ev.iteration, tool: ev.tool, args: ev.args });
-            else if (ev.event === 'tool_result') webview.postMessage({ type: 'agentToolResult', iteration: ev.iteration, tool: ev.tool, success: ev.success, output: ev.output });
+            else if (ev.event === 'tool_call') {
+              webview.postMessage({ type: 'agentToolCall', iteration: ev.iteration, tool: ev.tool, args: ev.args });
+              // Despachar tool-call si está registrada localmente
+              const result = await handleAgentToolCall(ev.tool, ev.args, wsContext);
+              webview.postMessage({ type: 'agentToolResult', iteration: ev.iteration, tool: ev.tool, success: !!result.success, output: result.output });
+            }
+            else if (ev.event === 'tool_result') {
+              webview.postMessage({ type: 'agentToolResult', iteration: ev.iteration, tool: ev.tool, success: ev.success, output: ev.output });
+            }
             else if (ev.event === 'answer') webview.postMessage({ type: 'agentAnswer', content: ev.content });
             else if (ev.event === 'error') webview.postMessage({ type: 'agentError', text: ev.content });
             else if (ev.event === 'file_create') {
@@ -2672,7 +2723,6 @@ function activate(context) {
         });
         vscode.window.showInformationMessage('Código insertado en: ' + vscode.workspace.asRelativePath(targetUri));
       }
-    });
   };
 
   const evaluateQualityAlerts = async (source, hadError) => {
@@ -4692,8 +4742,6 @@ function activate(context) {
       vscode.window.showErrorMessage('Image analysis failed: ' + (err instanceof Error ? err.message : String(err)));
     }
   }));
-}
-
 function deactivate() {}
-
+}
 module.exports = { activate, deactivate };
