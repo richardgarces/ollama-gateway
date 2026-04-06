@@ -72,6 +72,71 @@ async function enrichWithSemanticContext(prompt) {
   }
 }
 
+/**
+ * Gathers diagnostics (errors/warnings) from the active editor's file
+ * and appends them as context to the prompt.
+ */
+function autoAttachDiagnostics(prompt) {
+  try {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) return prompt;
+    const uri = editor.document.uri;
+    const diags = vscode.languages.getDiagnostics(uri);
+    const relevant = diags.filter(
+      (d) => d.severity === vscode.DiagnosticSeverity.Error || d.severity === vscode.DiagnosticSeverity.Warning
+    );
+    if (relevant.length === 0) return prompt;
+    const fileName = path.basename(uri.fsPath);
+    const lines = relevant.slice(0, 20).map((d) => {
+      const sev = d.severity === vscode.DiagnosticSeverity.Error ? 'ERROR' : 'WARN';
+      return '  [' + sev + '] L' + (d.range.start.line + 1) + ': ' + d.message;
+    });
+    return prompt + '\n\n[Current file diagnostics in ' + fileName + ']\n' + lines.join('\n');
+  } catch {
+    return prompt;
+  }
+}
+
+/**
+ * Saves a conversation exchange to cross-session memory via /api/memory/save.
+ * Only saves non-trivial interactions (summary > 20 chars).
+ */
+async function saveToMemory(summary, detail, tags) {
+  if (!summary || summary.length < 20) return;
+  try {
+    await postJSON('/api/memory/save', {
+      summary: summary.slice(0, 500),
+      detail: String(detail || '').slice(0, 3000),
+      priority: 5,
+      tags: Array.isArray(tags) ? tags : ['chat'],
+      source: 'vscode-extension',
+      ttl_hours: 720, // 30 days
+    });
+  } catch {
+    // Memory save is best-effort
+  }
+}
+
+/**
+ * Queries cross-session memory for relevant context before sending a prompt.
+ * Returns the prompt with prepended memory context, or unchanged if none found.
+ */
+async function enrichWithMemoryContext(prompt) {
+  if (!prompt || prompt.length < 15) return prompt;
+  try {
+    const res = await postJSON('/api/memory/query', { query: prompt, top_k: 3 });
+    const events = Array.isArray(res?.events) ? res.events : [];
+    if (events.length === 0) return prompt;
+    const memories = events
+      .filter((e) => e.summary)
+      .map((e) => '- ' + e.summary + (e.detail ? ': ' + e.detail.slice(0, 200) : ''));
+    if (memories.length === 0) return prompt;
+    return '[Relevant memories from previous sessions]\n' + memories.join('\n') + '\n\n' + prompt;
+  } catch {
+    return prompt;
+  }
+}
+
 function buildChatMessages(prompt, lang) {
   const desiredLang = String(lang || '').trim();
   const messages = [];
@@ -189,11 +254,30 @@ function loadPromptRC() {
       const trimmed = String(raw || '').trim();
       if (trimmed) {
         promptRCText = trimmed;
-        return;
+        break;
       }
     } catch {}
   }
-  promptRCText = '';
+  // Also load custom instructions files and merge them
+  const instructionCandidates = [
+    path.join(folder, '.copilot-local-instructions.md'),
+    path.join(folder, '.github', 'copilot-local-instructions.md'),
+    path.join(folder, '.copilot-instructions.md'),
+    path.join(folder, '.github', 'copilot-instructions.md'),
+  ];
+  for (const p of instructionCandidates) {
+    try {
+      const raw = fs.readFileSync(p, 'utf8');
+      const trimmed = String(raw || '').trim();
+      if (trimmed) {
+        promptRCText = promptRCText
+          ? promptRCText + '\n\n' + trimmed
+          : trimmed;
+        break; // Use the first found
+      }
+    } catch {}
+  }
+  if (!promptRCText) promptRCText = '';
 }
 
 function applyPromptRC(prompt) {
@@ -325,17 +409,19 @@ function buildFavoriteTitle(content) {
 function normalizeLanguageId(id) {
   const v = String(id || '').toLowerCase();
   const map = {
-    javascript: 'javascript',
-    typescript: 'typescript',
-    python: 'python',
-    go: 'go',
-    java: 'java',
-    rust: 'rust',
-    c: 'c',
-    cpp: 'cpp',
-    csharp: 'csharp',
-    ruby: 'ruby',
-    php: 'php',
+    javascript: 'javascript', javascriptreact: 'javascript',
+    typescript: 'typescript', typescriptreact: 'typescript',
+    python: 'python', go: 'go', java: 'java', rust: 'rust',
+    c: 'c', cpp: 'cpp', csharp: 'csharp', ruby: 'ruby', php: 'php',
+    swift: 'swift', kotlin: 'kotlin', scala: 'scala', lua: 'lua',
+    perl: 'perl', r: 'r', dart: 'dart', elixir: 'elixir', haskell: 'haskell',
+    shellscript: 'bash', bash: 'bash', zsh: 'bash', powershell: 'powershell',
+    sql: 'sql', html: 'html', css: 'css', scss: 'css', less: 'css',
+    json: 'json', jsonc: 'json', yaml: 'yaml', toml: 'toml', xml: 'xml',
+    markdown: 'markdown', dockerfile: 'dockerfile', makefile: 'makefile',
+    vue: 'vue', svelte: 'svelte', zig: 'zig', nim: 'nim', ocaml: 'ocaml',
+    fsharp: 'fsharp', groovy: 'groovy', terraform: 'terraform', graphql: 'graphql',
+    proto: 'protobuf', clojure: 'clojure',
   };
   return map[v] || v || 'unknown';
 }
@@ -1729,6 +1815,10 @@ const SLASH_COMMANDS = [
   { cmd: '/refactor', desc: 'Refactoriza para mayor claridad' },
   { cmd: '/doc', desc: 'Agrega documentación/docstrings' },
   { cmd: '/agent', desc: 'Modo autopilot: ejecuta tareas paso a paso' },
+  { cmd: '@workspace', desc: 'Busca contexto relevante en el repositorio' },
+  { cmd: '@terminal', desc: 'Inyecta la salida reciente del terminal' },
+  { cmd: '@problems', desc: 'Inyecta errores/warnings del panel Problems' },
+  { cmd: '@selection', desc: 'Inyecta el código seleccionado en el editor' },
 ];
 
 function sanitizeHTML(text) {
@@ -2260,11 +2350,20 @@ function initVoiceInput() {
   if (micBtn) micBtn.addEventListener('click', () => { try { listening ? recognition.stop() : recognition.start(); } catch { setVoiceStatus('unavailable', ''); } });
 }
 
-/* ── Slash command popup ── */
+/* ── Slash command & @mention popup ── */
 function updateSlashPopup() {
   const val = promptEl.value;
-  if (!val.startsWith('/') || val.includes(' ')) { slashPopupEl.classList.remove('show'); slashActive = -1; return; }
-  const q = val.toLowerCase();
+  // Support both /commands and @mentions (filter on last word for @mentions mid-sentence)
+  let q = '';
+  if (val.startsWith('/') && !val.includes(' ')) {
+    q = val.toLowerCase();
+  } else {
+    const lastWord = val.split(/\s/).pop() || '';
+    if (lastWord.startsWith('@')) {
+      q = lastWord.toLowerCase();
+    }
+  }
+  if (!q) { slashPopupEl.classList.remove('show'); slashActive = -1; return; }
   const matches = SLASH_COMMANDS.filter(c => c.cmd.startsWith(q));
   if (matches.length === 0) { slashPopupEl.classList.remove('show'); slashActive = -1; return; }
   slashPopupEl.innerHTML = matches.map((c, i) =>
@@ -2273,7 +2372,17 @@ function updateSlashPopup() {
   slashPopupEl.classList.add('show');
   slashPopupEl.querySelectorAll('.slash-item').forEach((el) => {
     el.addEventListener('click', () => {
-      promptEl.value = el.dataset.cmd + ' ';
+      const cmd = el.dataset.cmd;
+      if (cmd.startsWith('@')) {
+        // Replace only the last @word in the input
+        const parts = promptEl.value.split(/(\s)/);
+        for (let k = parts.length - 1; k >= 0; k--) {
+          if (parts[k].startsWith('@')) { parts[k] = cmd; break; }
+        }
+        promptEl.value = parts.join('') + ' ';
+      } else {
+        promptEl.value = cmd + ' ';
+      }
       slashPopupEl.classList.remove('show');
       slashActive = -1;
       promptEl.focus();
@@ -2555,6 +2664,41 @@ function activate(context) {
   perfStatus.tooltip = 'Latency and tokens/sec';
   perfStatus.show();
   context.subscriptions.push(perfStatus);
+
+  // ── #17 Rate Limiting Visual ── rolling window of request timestamps + latency
+  const rateLimitStatus = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 86);
+  rateLimitStatus.text = '$(pulse) 0 req/m';
+  rateLimitStatus.tooltip = 'Copilot Local – Request rate';
+  rateLimitStatus.show();
+  context.subscriptions.push(rateLimitStatus);
+
+  const requestLog = []; // { ts: number, latency: number }
+  const RATE_WINDOW_MS = 60000;
+  const RATE_WARN_THRESHOLD = 30; // requests per minute
+
+  function trackRequest(latencyMs) {
+    requestLog.push({ ts: Date.now(), latency: latencyMs || 0 });
+    refreshRateLimitStatus();
+  }
+
+  function refreshRateLimitStatus() {
+    const now = Date.now();
+    while (requestLog.length > 0 && now - requestLog[0].ts > RATE_WINDOW_MS) requestLog.shift();
+    const count = requestLog.length;
+    const avgLat = count > 0 ? Math.round(requestLog.reduce((s, r) => s + r.latency, 0) / count) : 0;
+    rateLimitStatus.text = '$(pulse) ' + count + ' req/m';
+    rateLimitStatus.tooltip = 'Requests last minute: ' + count + '\nAvg latency: ' + avgLat + 'ms';
+    if (count >= RATE_WARN_THRESHOLD) {
+      rateLimitStatus.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
+      rateLimitStatus.text = '$(warning) ' + count + ' req/m';
+    } else {
+      rateLimitStatus.backgroundColor = undefined;
+    }
+  }
+
+  // Refresh rate display every 10 seconds
+  const rateLimitInterval = setInterval(refreshRateLimitStatus, 10000);
+  context.subscriptions.push({ dispose() { clearInterval(rateLimitInterval); } });
 
   const refreshPerfStatus = () => {
     const snap = metrics.getSnapshot();
@@ -2863,7 +3007,7 @@ function activate(context) {
       }
       if (msg.type === 'chat') {
         const model = String(msg.model || getConfig().chatModel);
-        const resolvedText = resolveSlashChatPrompt(msg.text);
+        const resolvedText = await resolveMentions(resolveSlashChatPrompt(msg.text));
         selectedModel = model;
         if (activeSessionId) {
           const endpoint = '/api/sessions/' + encodeURIComponent(activeSessionId) + '/chat';
@@ -2877,13 +3021,17 @@ function activate(context) {
           }
           return;
         }
-        const enrichedText = await enrichWithSemanticContext(resolvedText);
+        const enrichedText = autoAttachDiagnostics(await enrichWithMemoryContext(await enrichWithSemanticContext(resolvedText)));
+        let responseCollector = '';
         streamWithFallback(enrichedText, model,
-          (chunk) => webview.postMessage({ type: 'chunk', text: chunk }),
+          (chunk) => { responseCollector += chunk; webview.postMessage({ type: 'chunk', text: chunk }); },
           (err) => {
             evaluateQualityAlerts('chat', !!err);
             if (err) webview.postMessage({ type: 'error', text: err.message });
-            else webview.postMessage({ type: 'done' });
+            else {
+              webview.postMessage({ type: 'done' });
+              saveToMemory(resolvedText.slice(0, 200), responseCollector.slice(0, 1000), ['chat']);
+            }
           },
         );
         return;
@@ -3174,6 +3322,107 @@ function activate(context) {
   const poll = setInterval(refreshIndexerStatus, 15000);
   context.subscriptions.push({ dispose: () => clearInterval(poll) });
 
+  // ── Next Edit Suggestion (NES) — track recent edits ──
+  const recentEdits = []; // {file, before, after, line, ts}
+  const MAX_RECENT_EDITS = 5;
+  context.subscriptions.push(vscode.workspace.onDidChangeTextDocument((event) => {
+    if (event.document.uri.scheme !== 'file') return;
+    if (event.contentChanges.length === 0) return;
+    const file = vscode.workspace.asRelativePath(event.document.uri);
+    for (const change of event.contentChanges) {
+      const before = change.rangeLength > 0 ? change.rangeOffset : -1;
+      const after = change.text;
+      if (!after && before < 0) continue;
+      // Only track meaningful edits (not single chars from typing)
+      if (after.length < 3 && before < 0) continue;
+      recentEdits.push({
+        file,
+        line: change.range.start.line + 1,
+        removed: before > 0 ? event.document.getText(change.range) : '',
+        added: after,
+        ts: Date.now(),
+      });
+      if (recentEdits.length > MAX_RECENT_EDITS) recentEdits.shift();
+    }
+  }));
+
+  // ── #12 Docstring auto-generation on-type ──
+  // Detect doc comment openers (/** , ///, """, #) and generate docstring for the function below
+  let docgenDebounce = null;
+  context.subscriptions.push(vscode.workspace.onDidChangeTextDocument(async (event) => {
+    if (event.document.uri.scheme !== 'file') return;
+    if (event.contentChanges.length === 0) return;
+    const editor = vscode.window.activeTextEditor;
+    if (!editor || editor.document.uri.toString() !== event.document.uri.toString()) return;
+
+    const lastChange = event.contentChanges[event.contentChanges.length - 1];
+    const insertedText = lastChange.text;
+    const line = event.document.lineAt(lastChange.range.start.line).text.trimStart();
+
+    // Detect doc comment patterns
+    const isDocTrigger =
+      (line === '/**' && insertedText.includes('*')) ||
+      (line === '///' && insertedText === '/') ||
+      (line === '"""' && insertedText === '"') ||
+      (line === "'''" && insertedText === "'");
+    if (!isDocTrigger) return;
+
+    // Debounce to avoid firing multiple times
+    if (docgenDebounce) clearTimeout(docgenDebounce);
+    docgenDebounce = setTimeout(async () => {
+      try {
+        const docLine = lastChange.range.start.line;
+        // Read the next 30 lines to capture the function signature
+        const endLine = Math.min(event.document.lineCount - 1, docLine + 30);
+        const codeBelow = event.document.getText(
+          new vscode.Range(new vscode.Position(docLine + 1, 0), new vscode.Position(endLine, event.document.lineAt(endLine).text.length))
+        );
+        if (!codeBelow.trim()) return;
+
+        const lang = normalizeLanguageId(event.document.languageId);
+        const prompt = 'Generate ONLY the documentation comment body (without the opening/closing markers) for this ' + lang + ' code. Be concise:\n\n' + codeBelow.slice(0, 1500);
+        const res = await postJSON('/api/chat', { messages: [{ role: 'user', content: prompt }], model: getConfig().chatModel, stream: false });
+        const text = String(res?.response || res?.message?.content || '').trim();
+        if (!text || text.length < 5) return;
+
+        // Format docstring based on language
+        let docContent;
+        if (line.startsWith('/**')) {
+          docContent = '\n' + text.split('\n').map((l) => ' * ' + l).join('\n') + '\n */';
+        } else if (line.startsWith('///')) {
+          docContent = '\n' + text.split('\n').map((l) => '/// ' + l).join('\n');
+        } else if (line.startsWith('"""') || line.startsWith("'''")) {
+          docContent = '\n' + text + '\n' + line; // close with matching quotes
+        } else {
+          docContent = '\n' + text;
+        }
+
+        // Insert at end of the doc comment opener line
+        const insertPos = new vscode.Position(docLine, event.document.lineAt(docLine).text.length);
+        const edit = new vscode.WorkspaceEdit();
+        edit.insert(event.document.uri, insertPos, docContent);
+        await vscode.workspace.applyEdit(edit);
+      } catch {
+        // Docstring generation is best-effort
+      }
+    }, 800);
+  }));
+
+  function buildRecentEditsHint() {
+    if (recentEdits.length === 0) return '';
+    // Only include edits from last 60 seconds
+    const cutoff = Date.now() - 60000;
+    const recent = recentEdits.filter((e) => e.ts > cutoff);
+    if (recent.length === 0) return '';
+    const lines = recent.map((e) => {
+      if (e.removed && e.added) return '// NES: ' + e.file + ':' + e.line + ' replaced "' + e.removed.slice(0, 80) + '" with "' + e.added.slice(0, 80) + '"';
+      if (e.added) return '// NES: ' + e.file + ':' + e.line + ' added "' + e.added.slice(0, 80) + '"';
+      return '';
+    }).filter(Boolean);
+    if (lines.length === 0) return '';
+    return '// Recent edits (predict next edit pattern):\n' + lines.join('\n') + '\n';
+  }
+
   const completionDebounce = new Map();
   const inlineAbort = new Map();
   const inlineProvider = {
@@ -3199,7 +3448,8 @@ function activate(context) {
       const endLine = Math.min(document.lineCount - 1, position.line + 49);
       const prefixRange = new vscode.Range(new vscode.Position(startLine, 0), position);
       const suffixRange = new vscode.Range(position, new vscode.Position(endLine, document.lineAt(endLine).text.length));
-      const prefix = applyPromptRC(document.getText(prefixRange));
+      const nesHint = buildRecentEditsHint();
+      const prefix = nesHint + applyPromptRC(document.getText(prefixRange));
       const suffix = document.getText(suffixRange);
       inlineStatus.text = '$(loading~spin) Completing...';
       mainStatus.text = '$(loading~spin) Copilot Local';
@@ -3230,12 +3480,142 @@ function activate(context) {
     output.appendLine('[warn] Inline completions API is not available in this VS Code version.');
   }
 
+  // ── Code Action Provider — "Fix with Copilot Local" lightbulb ──
+  const copilotCodeActionProvider = {
+    provideCodeActions(document, range, context) {
+      // Only provide actions when there are diagnostics (errors/warnings)
+      const diagnostics = context.diagnostics;
+      if (!diagnostics || diagnostics.length === 0) return [];
+
+      const actions = [];
+
+      // Offer a fix action for each error/warning diagnostic
+      const relevantDiags = diagnostics.filter(
+        (d) => d.severity === vscode.DiagnosticSeverity.Error || d.severity === vscode.DiagnosticSeverity.Warning
+      );
+      if (relevantDiags.length === 0) return [];
+
+      const fixAction = new vscode.CodeAction(
+        '$(sparkle) Fix with Copilot Local (' + relevantDiags.length + ' issue' + (relevantDiags.length > 1 ? 's' : '') + ')',
+        vscode.CodeActionKind.QuickFix
+      );
+      fixAction.diagnostics = relevantDiags;
+      fixAction.command = {
+        title: 'Fix with Copilot Local',
+        command: 'copilot-local.fixDiagnostics',
+        arguments: [document.uri, range, relevantDiags],
+      };
+      fixAction.isPreferred = false;
+      actions.push(fixAction);
+
+      // Also offer explain
+      const explainAction = new vscode.CodeAction(
+        '$(lightbulb) Explain error with Copilot Local',
+        vscode.CodeActionKind.QuickFix
+      );
+      explainAction.diagnostics = relevantDiags;
+      explainAction.command = {
+        title: 'Explain error with Copilot Local',
+        command: 'copilot-local.explainDiagnostics',
+        arguments: [document.uri, range, relevantDiags],
+      };
+      actions.push(explainAction);
+
+      return actions;
+    },
+  };
+  context.subscriptions.push(
+    vscode.languages.registerCodeActionsProvider({ pattern: '**' }, copilotCodeActionProvider, {
+      providedCodeActionKinds: [vscode.CodeActionKind.QuickFix],
+    })
+  );
+
+  // Command: fix diagnostics inline
+  context.subscriptions.push(vscode.commands.registerCommand('copilot-local.fixDiagnostics', async (uri, range, diagnostics) => {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor || editor.document.uri.toString() !== uri.toString()) {
+      const doc = await vscode.workspace.openTextDocument(uri);
+      await vscode.window.showTextDocument(doc);
+    }
+    const doc = vscode.window.activeTextEditor?.document;
+    if (!doc) return;
+
+    const diagMessages = diagnostics.map((d) => d.message).join('\n');
+    const surroundStart = Math.max(0, range.start.line - 5);
+    const surroundEnd = Math.min(doc.lineCount - 1, range.end.line + 5);
+    const codeContext = doc.getText(new vscode.Range(surroundStart, 0, surroundEnd, doc.lineAt(surroundEnd).text.length));
+    const lang = doc.languageId || 'plaintext';
+
+    const prompt = 'You are a code fixer. The following ' + lang + ' code has errors:\n\n' +
+      'Errors:\n' + diagMessages + '\n\n' +
+      'Code context (lines ' + (surroundStart + 1) + '-' + (surroundEnd + 1) + '):\n```' + lang + '\n' + codeContext + '\n```\n\n' +
+      'Return ONLY the fixed code that should replace lines ' + (surroundStart + 1) + '-' + (surroundEnd + 1) + '. No explanations, no markdown fences.';
+
+    const statusItem = vscode.window.setStatusBarMessage('$(loading~spin) Fixing with Copilot...');
+    try {
+      const cfg = getConfig();
+      const res = await requestChatCompletion(prompt, cfg.chatModel);
+      let replacement = String(res?.content || '').trim();
+
+      // Strip markdown fences if present
+      if (replacement.startsWith('```')) {
+        const lines = replacement.split('\n');
+        lines.shift();
+        if (lines.length > 0 && lines[lines.length - 1].trim() === '```') lines.pop();
+        replacement = lines.join('\n');
+      }
+
+      if (!replacement) {
+        vscode.window.showInformationMessage('Copilot: no fix suggestion available');
+        return;
+      }
+
+      const targetRange = new vscode.Range(surroundStart, 0, surroundEnd, doc.lineAt(surroundEnd).text.length);
+      const originalText = doc.getText(targetRange);
+      const originalDoc = await vscode.workspace.openTextDocument({ content: originalText, language: lang });
+      const proposedDoc = await vscode.workspace.openTextDocument({ content: replacement, language: lang });
+      await vscode.commands.executeCommand('vscode.diff', originalDoc.uri, proposedDoc.uri, 'Copilot Fix Preview', { preview: true, viewColumn: vscode.ViewColumn.Beside });
+
+      const decision = await vscode.window.showInformationMessage('Apply fix?', 'Apply', 'Discard');
+      if (decision === 'Apply') {
+        const edit = new vscode.WorkspaceEdit();
+        edit.replace(doc.uri, targetRange, replacement);
+        await vscode.workspace.applyEdit(edit);
+        try { await vscode.commands.executeCommand('editor.action.formatDocument'); } catch {}
+        vscode.window.showInformationMessage('Fix applied');
+      }
+    } catch (err) {
+      vscode.window.showErrorMessage('Fix failed: ' + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      statusItem.dispose();
+    }
+  }));
+
+  // Command: explain diagnostics in chat
+  context.subscriptions.push(vscode.commands.registerCommand('copilot-local.explainDiagnostics', async (uri, range, diagnostics) => {
+    const doc = await vscode.workspace.openTextDocument(uri);
+    const diagMessages = diagnostics.map((d) => {
+      const sev = d.severity === vscode.DiagnosticSeverity.Error ? 'ERROR' : 'WARNING';
+      return sev + ' (line ' + (d.range.start.line + 1) + '): ' + d.message;
+    }).join('\n');
+    const surroundStart = Math.max(0, range.start.line - 3);
+    const surroundEnd = Math.min(doc.lineCount - 1, range.end.line + 3);
+    const codeContext = doc.getText(new vscode.Range(surroundStart, 0, surroundEnd, doc.lineAt(surroundEnd).text.length));
+
+    const prompt = 'Explain these errors and how to fix them:\n\n' + diagMessages + '\n\nCode:\n```\n' + codeContext + '\n```';
+
+    const wv = await focusChatAndGetWebview();
+    wv.postMessage({ type: 'runPrompt', text: prompt });
+  }));
+
   const streamWithFallback = (prompt, model, onChunk, onDone) => {
     const abortCtl = new AbortController();
     activeChatAbort = abortCtl;
+    const streamStart = Date.now();
 
     const done = (err) => {
       if (activeChatAbort === abortCtl) activeChatAbort = null;
+      trackRequest(Date.now() - streamStart);
       onDone(err);
     };
 
@@ -3331,6 +3711,93 @@ function activate(context) {
     if (!second) return null;
 
     return [first.value, second.value];
+  };
+
+  // ── @mention resolution ──
+  const resolveMentions = async (text) => {
+    if (!text || !text.includes('@')) return text;
+    let result = text;
+
+    // @workspace <query> — semantic search in indexed repo
+    const wsMatch = result.match(/@workspace\s+(.+?)(?=@|\n|$)/i);
+    if (wsMatch) {
+      const query = wsMatch[1].trim();
+      let context = '';
+      try {
+        const res = await postJSON('/api/v2/search', { query, top: 5 });
+        const hits = Array.isArray(res?.result) ? res.result : [];
+        if (hits.length > 0) {
+          context = '\n\n[Workspace search results for "' + query + '"]:\n' +
+            hits.filter((h) => h.payload?.content).map((h) => {
+              let c = String(h.payload.content);
+              if (c.length > 1500) c = c.slice(0, 1500) + '...';
+              return '--- ' + (h.payload.path || '?') + ' ---\n' + c;
+            }).join('\n\n');
+        }
+      } catch {}
+      result = result.replace(wsMatch[0], query + context);
+    }
+
+    // @terminal — inject last terminal output
+    if (/@terminal\b/i.test(result)) {
+      let termContent = '';
+      try {
+        const clip = await vscode.env.clipboard.readText();
+        // Try terminal selection first
+        await vscode.commands.executeCommand('workbench.action.terminal.copySelection');
+        const termClip = await vscode.env.clipboard.readText();
+        if (termClip && termClip !== clip) {
+          termContent = termClip;
+        }
+        // Restore clipboard
+        if (clip) await vscode.env.clipboard.writeText(clip);
+      } catch {}
+      if (!termContent && lastTerminalOutput) {
+        termContent = lastTerminalOutput;
+      }
+      if (termContent) {
+        if (termContent.length > 4000) termContent = termContent.slice(-4000);
+        result = result.replace(/@terminal\b/i, '\n[Terminal output]:\n```\n' + termContent + '\n```\n');
+      } else {
+        result = result.replace(/@terminal\b/i, '\n[Terminal output: none available]\n');
+      }
+    }
+
+    // @problems — inject diagnostics from Problems panel
+    if (/@problems\b/i.test(result)) {
+      const diagnostics = vscode.languages.getDiagnostics();
+      const errors = [];
+      for (const [uri, diags] of diagnostics) {
+        for (const d of diags) {
+          if (d.severity <= vscode.DiagnosticSeverity.Warning) {
+            const rel = vscode.workspace.asRelativePath(uri);
+            const sev = d.severity === vscode.DiagnosticSeverity.Error ? 'ERROR' : 'WARN';
+            errors.push(sev + ' ' + rel + ':' + (d.range.start.line + 1) + ' ' + d.message);
+          }
+        }
+      }
+      if (errors.length > 50) errors.length = 50;
+      const problemsCtx = errors.length > 0
+        ? '\n[Problems (' + errors.length + ')]:\n' + errors.join('\n')
+        : '\n[No problems detected]\n';
+      result = result.replace(/@problems\b/i, problemsCtx);
+    }
+
+    // @selection — inject current editor selection
+    if (/@selection\b/i.test(result)) {
+      const editor = vscode.window.activeTextEditor;
+      let selText = '';
+      if (editor && !editor.selection.isEmpty) {
+        selText = editor.document.getText(editor.selection);
+        const rel = vscode.workspace.asRelativePath(editor.document.uri);
+        if (selText.length > 6000) selText = selText.slice(0, 6000) + '...';
+        result = result.replace(/@selection\b/i, '\n[Selected code from ' + rel + ']:\n```\n' + selText + '\n```\n');
+      } else {
+        result = result.replace(/@selection\b/i, '\n[No selection active]\n');
+      }
+    }
+
+    return result;
   };
 
   const resolveSlashChatPrompt = (rawText) => {
@@ -3453,7 +3920,7 @@ function activate(context) {
 
       if (msg.type === 'chat') {
         const model = String(msg.model || getConfig().chatModel);
-        const resolvedText = resolveSlashChatPrompt(msg.text);
+        const resolvedText = await resolveMentions(resolveSlashChatPrompt(msg.text));
         selectedModel = model;
         if (activeSessionId) {
           const endpoint = '/api/sessions/' + encodeURIComponent(activeSessionId) + '/chat';
@@ -3468,13 +3935,17 @@ function activate(context) {
           return;
         }
 
-        const enrichedText = await enrichWithSemanticContext(resolvedText);
+        const enrichedText = autoAttachDiagnostics(await enrichWithMemoryContext(await enrichWithSemanticContext(resolvedText)));
+        let responseCollector = '';
         streamWithFallback(enrichedText, model,
-          (chunk) => chatPanel?.webview.postMessage({ type: 'chunk', text: chunk }),
+          (chunk) => { responseCollector += chunk; chatPanel?.webview.postMessage({ type: 'chunk', text: chunk }); },
           (err) => {
             evaluateQualityAlerts('chat', !!err);
             if (err) chatPanel?.webview.postMessage({ type: 'error', text: err.message });
-            else chatPanel?.webview.postMessage({ type: 'done' });
+            else {
+              chatPanel?.webview.postMessage({ type: 'done' });
+              saveToMemory(resolvedText.slice(0, 200), responseCollector.slice(0, 1000), ['chat']);
+            }
           },
         );
         return;
@@ -4308,13 +4779,60 @@ function activate(context) {
     const fullText = editor.document.getText().trim();
     const code = selected || fullText;
 
+    // ── Gather existing test files as context ──
+    let existingTests = '';
+    try {
+      const currentUri = editor.document.uri;
+      const dir = vscode.Uri.joinPath(currentUri, '..');
+      const dirPath = vscode.workspace.asRelativePath(dir);
+      // Search for test files in the same directory
+      const testPatterns = [
+        dirPath + '/*_test.go',
+        dirPath + '/*_test.{ts,js}',
+        dirPath + '/*.test.{ts,js,tsx,jsx}',
+        dirPath + '/*.spec.{ts,js,tsx,jsx}',
+        dirPath + '/test_*.py',
+        dirPath + '/*_test.py',
+      ];
+      const testFiles = [];
+      for (const pat of testPatterns) {
+        try {
+          const uris = await vscode.workspace.findFiles(pat, '**/node_modules/**', 3);
+          testFiles.push(...uris);
+        } catch {}
+      }
+      // Deduplicate and exclude current file
+      const seen = new Set();
+      const unique = testFiles.filter((u) => {
+        const k = u.toString();
+        if (seen.has(k) || k === currentUri.toString()) return false;
+        seen.add(k);
+        return true;
+      }).slice(0, 3);
+
+      if (unique.length > 0) {
+        const parts = [];
+        for (const u of unique) {
+          try {
+            const raw = await vscode.workspace.fs.readFile(u);
+            let content = Buffer.from(raw).toString('utf8');
+            if (content.length > 3000) content = content.slice(0, 3000) + '\n...(truncated)';
+            parts.push('--- ' + vscode.workspace.asRelativePath(u) + ' ---\n' + content);
+          } catch {}
+        }
+        if (parts.length > 0) {
+          existingTests = '\n\nExisting test files in the same directory (follow this style and patterns):\n\n' + parts.join('\n\n');
+        }
+      }
+    } catch {}
+
     try {
       let result;
       if (mode.value === 'apply') {
-        result = await postJSON('/api/testgen/file', { path: editor.document.fileName, apply: true });
+        result = await postJSON('/api/testgen/file', { path: editor.document.fileName, apply: true, existing_tests: existingTests });
       } else {
         const lang = normalizeLanguageId(editor.document.languageId);
-        result = await postJSON('/api/testgen', { code, lang });
+        result = await postJSON('/api/testgen', { code: code + existingTests, lang });
       }
 
       const testCode = (result && result.test_code) ? String(result.test_code) : '';
@@ -4641,6 +5159,107 @@ function activate(context) {
       wv.postMessage({ type: 'externalResult', text });
     } catch (err) {
       vscode.window.showErrorMessage('Terminal error analysis failed: ' + (err instanceof Error ? err.message : String(err)));
+    }
+  }));
+
+  // ── #11 Smart Rename — LLM-powered rename suggestions ──
+  context.subscriptions.push(vscode.commands.registerCommand('copilot-local.smartRename', async () => {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) { vscode.window.showInformationMessage('No active editor'); return; }
+
+    const document = editor.document;
+    const position = editor.selection.active;
+    const wordRange = document.getWordRangeAtPosition(position);
+    if (!wordRange) { vscode.window.showInformationMessage('No symbol under cursor'); return; }
+
+    const currentName = document.getText(wordRange);
+    if (!currentName || currentName.length < 2) return;
+
+    // Gather surrounding context (±20 lines)
+    const startLine = Math.max(0, position.line - 20);
+    const endLine = Math.min(document.lineCount - 1, position.line + 20);
+    const context_code = document.getText(new vscode.Range(
+      new vscode.Position(startLine, 0),
+      new vscode.Position(endLine, document.lineAt(endLine).text.length)
+    ));
+
+    const lang = normalizeLanguageId(document.languageId);
+    const prompt = 'In this ' + lang + ' code, the symbol "' + currentName + '" at line ' + (position.line + 1) +
+      ' could have a better name. Suggest 3 better names that follow ' + lang + ' naming conventions. ' +
+      'Return ONLY a JSON array of strings, e.g. ["name1","name2","name3"]. No explanation.\n\nCode:\n' + context_code.slice(0, 2000);
+
+    try {
+      const res = await postJSON('/api/chat', { messages: [{ role: 'user', content: prompt }], model: getConfig().chatModel, stream: false });
+      const raw = String(res?.response || res?.message?.content || '').trim();
+      // Parse JSON array from response
+      const match = raw.match(/\[[\s\S]*?\]/);
+      if (!match) { vscode.window.showWarningMessage('Could not parse rename suggestions'); return; }
+      const suggestions = JSON.parse(match[0]).filter((s) => typeof s === 'string' && s.trim());
+      if (suggestions.length === 0) { vscode.window.showInformationMessage('No rename suggestions'); return; }
+
+      const pick = await vscode.window.showQuickPick(
+        suggestions.map((s) => ({ label: s, description: 'Rename "' + currentName + '" → "' + s + '"' })),
+        { placeHolder: 'Select a new name for "' + currentName + '"' }
+      );
+      if (!pick) return;
+
+      // Use VS Code's built-in rename to apply across all references
+      const renameEdit = new vscode.WorkspaceEdit();
+      renameEdit.replace(document.uri, wordRange, pick.label);
+      await vscode.workspace.applyEdit(renameEdit);
+      vscode.window.showInformationMessage('Renamed "' + currentName + '" → "' + pick.label + '"');
+    } catch (err) {
+      vscode.window.showErrorMessage('Smart rename failed: ' + (err instanceof Error ? err.message : String(err)));
+    }
+  }));
+
+  // ── #13 Vision/Image support — send images to chat ──
+  context.subscriptions.push(vscode.commands.registerCommand('copilot-local.sendImage', async () => {
+    const files = await vscode.window.showOpenDialog({
+      canSelectMany: false,
+      filters: { 'Images': ['png', 'jpg', 'jpeg', 'gif', 'webp'] },
+      title: 'Select an image to analyze',
+    });
+    if (!files || files.length === 0) return;
+
+    const filePath = files[0].fsPath;
+    const ext = path.extname(filePath).toLowerCase().replace('.', '');
+    const maxSize = 10 * 1024 * 1024; // 10MB
+
+    try {
+      const stat = fs.statSync(filePath);
+      if (stat.size > maxSize) {
+        vscode.window.showWarningMessage('Image too large (max 10MB)');
+        return;
+      }
+
+      const imageData = fs.readFileSync(filePath);
+      const base64 = imageData.toString('base64');
+
+      const question = await vscode.window.showInputBox({
+        prompt: 'What would you like to know about this image?',
+        value: 'Describe this image and any code or text visible in it.',
+      });
+      if (!question) return;
+
+      const wv = await focusChatAndGetWebview();
+      wv.postMessage({ type: 'chunk', text: '**Analyzing image:** ' + path.basename(filePath) + '...\n\n' });
+
+      // Send to Ollama with vision model (llava or similar)
+      const res = await postJSON('/api/chat', {
+        messages: [{
+          role: 'user',
+          content: question,
+          images: [base64],
+        }],
+        model: 'llava',
+        stream: false,
+      });
+      const answer = String(res?.response || res?.message?.content || 'No response from vision model');
+      wv.postMessage({ type: 'chunk', text: answer });
+      wv.postMessage({ type: 'done' });
+    } catch (err) {
+      vscode.window.showErrorMessage('Image analysis failed: ' + (err instanceof Error ? err.message : String(err)));
     }
   }));
 }

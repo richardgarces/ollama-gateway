@@ -2,7 +2,7 @@
   "name": "copilot-local",
   "displayName": "Copilot Local",
   "description": "Local AI Copilot with sidebar chat, inline completions, RAG and streaming",
-  "version": "0.2.6",
+  "version": "0.2.12",
   "engines": {
     "vscode": "^1.60.0"
   },
@@ -35,7 +35,9 @@
     "onCommand:copilot-local.generatePipelineAndOpen",
     "onCommand:copilot-local.createPRSummary",
     "onCommand:copilot-local.inlineChat",
-    "onCommand:copilot-local.fixTerminalError"
+    "onCommand:copilot-local.fixTerminalError",
+    "onCommand:copilot-local.smartRename",
+    "onCommand:copilot-local.sendImage"
   ],
   "main": "dist/extension.js",
   "scripts": {
@@ -223,6 +225,16 @@
         "command": "copilot-local.newChat",
         "title": "New Chat",
         "icon": "$(add)"
+      },
+      {
+        "command": "copilot-local.smartRename",
+        "title": "Copilot Local: Smart Rename Symbol",
+        "icon": "$(symbol-key)"
+      },
+      {
+        "command": "copilot-local.sendImage",
+        "title": "Copilot Local: Analyze Image",
+        "icon": "$(file-media)"
       }
     ],
     "keybindings": [
@@ -265,6 +277,12 @@
         "command": "copilot-local.inlineChat",
         "key": "ctrl+i",
         "mac": "cmd+i",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "copilot-local.smartRename",
+        "key": "ctrl+shift+f2",
+        "mac": "cmd+shift+f2",
         "when": "editorTextFocus"
       }
     ],
@@ -399,6 +417,14 @@
         },
         {
           "command": "copilot-local.resetQualityAlerts",
+          "group": "2_tools"
+        },
+        {
+          "command": "copilot-local.smartRename",
+          "group": "1_main"
+        },
+        {
+          "command": "copilot-local.sendImage",
           "group": "2_tools"
         }
       ]

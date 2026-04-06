@@ -76,7 +76,8 @@ func (s *AutopilotService) RunStream(ctx context.Context, task, model string, ws
 		"- edit_file (workspace): edita un archivo existente reemplazando un fragmento específico. Args: {\"path\": \"relative/path\", \"search\": \"texto exacto a buscar\", \"replace\": \"texto de reemplazo\"}. Incluye unas pocas líneas de contexto en search para ser preciso.\n" +
 		"- modify_file (workspace): reemplaza TODO el contenido de un archivo. Solo úsalo si necesitas reescribir el archivo completo. Args: {\"path\": \"relative/path\", \"content\": \"contenido nuevo completo del archivo\"}\n" +
 		"- delete_file (workspace): elimina un archivo del workspace. Args: {\"path\": \"relative/path\"}\n" +
-		"- run_command (workspace): ejecuta un comando en la terminal del workspace (git, npm, go, etc). Args: {\"command\": \"comando a ejecutar\"}"
+		"- run_command (workspace): ejecuta un comando en la terminal del workspace (git, npm, go, etc). Args: {\"command\": \"comando a ejecutar\"}\n" +
+		"- multi_edit (workspace): aplica ediciones parciales a MÚLTIPLES archivos en un solo paso. Args: {\"edits\": \"JSON array\"} donde cada elemento es {\"path\":\"...\",\"search\":\"...\",\"replace\":\"...\"}. Ejemplo: {\"edits\":\"[{\\\"path\\\":\\\"a.go\\\",\\\"search\\\":\\\"old\\\",\\\"replace\\\":\\\"new\\\"},{\\\"path\\\":\\\"b.go\\\",\\\"search\\\":\\\"old2\\\",\\\"replace\\\":\\\"new2\\\"}]\"}"
 
 	// If workspace context has files, mention them
 	wsInfo := ""
@@ -105,7 +106,7 @@ func (s *AutopilotService) RunStream(ctx context.Context, task, model string, ws
 		"2. Para usar una herramienta: {\"action\":\"nombre_tool\",\"args\":{\"key\":\"value\"},\"thought\":\"tu razonamiento\"}\n" +
 		"3. Para dar la respuesta final: {\"action\":\"answer\",\"response\":\"tu respuesta completa\",\"thought\":\"resumen\"}\n" +
 		"4. Analiza los resultados de herramientas anteriores antes de decidir el siguiente paso.\n" +
-		"5. Para editar archivos, PREFIERE edit_file (edición parcial search/replace) sobre modify_file. Usa modify_file solo si necesitas reescribir el archivo entero.\n" +
+		"5. Para editar archivos, PREFIERE edit_file (edición parcial search/replace) sobre modify_file. Si necesitas cambiar varios archivos a la vez, usa multi_edit.\n" +
 		"6. Para eliminar archivos, usa delete_file.\n" +
 		"7. Para ejecutar comandos del sistema (git, npm, go build, etc.), usa run_command.\n" +
 		"8. Si la tarea requiere información actualizada de Internet (noticias, documentación, precios, fechas, etc.), usa web_search.\n" +
@@ -282,6 +283,44 @@ func (s *AutopilotService) RunStream(ctx context.Context, task, model string, ws
 			})
 			onEvent(AutopilotEvent{Event: "tool_result", Iteration: i, Tool: "edit_file", Success: &t, Output: "Edición propuesta para: " + path + " (pendiente de aceptación del usuario)"})
 			history = append(history, fmt.Sprintf("PASO %d: edit_file(%s) → search/replace propuesto al usuario", i, path))
+			continue
+
+		case "multi_edit":
+			editsRaw := args["edits"]
+			if editsRaw == "" {
+				f := false
+				onEvent(AutopilotEvent{Event: "tool_result", Iteration: i, Tool: "multi_edit", Success: &f, Output: "edits (JSON array) es requerido"})
+				history = append(history, fmt.Sprintf("PASO %d: multi_edit → falta edits", i))
+				continue
+			}
+			var edits []struct {
+				Path    string `json:"path"`
+				Search  string `json:"search"`
+				Replace string `json:"replace"`
+			}
+			if err := json.Unmarshal([]byte(editsRaw), &edits); err != nil {
+				f := false
+				onEvent(AutopilotEvent{Event: "tool_result", Iteration: i, Tool: "multi_edit", Success: &f, Output: "edits no es JSON válido: " + err.Error()})
+				history = append(history, fmt.Sprintf("PASO %d: multi_edit → JSON inválido", i))
+				continue
+			}
+			historyParts := []string{}
+			for idx, ed := range edits {
+				if ed.Path == "" || ed.Search == "" {
+					continue
+				}
+				onEvent(AutopilotEvent{
+					Event:       "file_edit",
+					Iteration:   i,
+					Tool:        "multi_edit",
+					FilePath:    ed.Path,
+					FileContent: ed.Search + "\n---REPLACE---\n" + ed.Replace,
+				})
+				historyParts = append(historyParts, fmt.Sprintf("  %d) %s", idx+1, ed.Path))
+			}
+			t := true
+			onEvent(AutopilotEvent{Event: "tool_result", Iteration: i, Tool: "multi_edit", Success: &t, Output: fmt.Sprintf("%d ediciones propuestas (pendiente de aceptación)", len(edits))})
+			history = append(history, fmt.Sprintf("PASO %d: multi_edit → %d archivos:\n%s", i, len(edits), strings.Join(historyParts, "\n")))
 			continue
 
 		case "delete_file":

@@ -49,7 +49,10 @@ connection.onInitialize((params) => {
     return {
         capabilities: {
             textDocumentSync: node_1.TextDocumentSyncKind.Incremental,
-            completionProvider: { resolveProvider: false, triggerCharacters: ['.', '(', ','] },
+            completionProvider: {
+                resolveProvider: false,
+                triggerCharacters: ['.', '(', ',', ':', '{', '[', '<', ' ', '\n', '=', '/', '@', '#'],
+            },
         },
     };
 });
@@ -88,6 +91,22 @@ async function postJSON(endpoint, payload) {
         req.end();
     });
 }
+// Language normalization map — expanded language support
+const languageMap = {
+    javascript: 'javascript', javascriptreact: 'javascript', typescript: 'typescript', typescriptreact: 'typescript',
+    python: 'python', go: 'go', java: 'java', rust: 'rust', c: 'c', cpp: 'cpp', csharp: 'csharp',
+    ruby: 'ruby', php: 'php', swift: 'swift', kotlin: 'kotlin', scala: 'scala', lua: 'lua',
+    perl: 'perl', r: 'r', dart: 'dart', elixir: 'elixir', haskell: 'haskell', clojure: 'clojure',
+    shellscript: 'bash', bash: 'bash', zsh: 'bash', fish: 'bash', powershell: 'powershell',
+    sql: 'sql', html: 'html', css: 'css', scss: 'css', less: 'css', json: 'json', jsonc: 'json',
+    yaml: 'yaml', toml: 'toml', xml: 'xml', markdown: 'markdown', dockerfile: 'dockerfile',
+    makefile: 'makefile', cmake: 'cmake', groovy: 'groovy', vue: 'vue', svelte: 'svelte',
+    zig: 'zig', nim: 'nim', ocaml: 'ocaml', fsharp: 'fsharp', erlang: 'erlang',
+    terraform: 'terraform', hcl: 'hcl', proto: 'protobuf', graphql: 'graphql',
+};
+function normalizeLanguage(id) {
+    return languageMap[id.toLowerCase()] || id.toLowerCase() || 'unknown';
+}
 connection.onCompletion(async (params) => {
     const doc = documents.get(params.textDocument.uri);
     if (!doc)
@@ -98,12 +117,13 @@ connection.onCompletion(async (params) => {
     const endOffset = Math.min(text.length, offset + 4000);
     const prefix = text.slice(startOffset, offset);
     const suffix = text.slice(offset, endOffset);
+    const language = normalizeLanguage(doc.languageId);
     try {
         const res = await postJSON('/complete', {
             model,
             prefix,
             suffix,
-            language: doc.languageId,
+            language,
             num_predict: 120,
         });
         const completion = String(res?.completion || '').trim();
