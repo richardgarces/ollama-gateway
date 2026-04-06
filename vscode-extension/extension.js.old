@@ -1,0 +1,69 @@
+// Wrapper legacy para compatibilidad con Copilot Local
+// Solo expone lo fundamental para legacy y registro de refactorización multi-archivo
+
+const registerMultiFileRefactor = require('./multiFileRefactor');
+
+function activate(context) {
+  if (typeof registerMultiFileRefactor === 'function') {
+    registerMultiFileRefactor(context);
+  }
+}
+
+function deactivate() {}
+
+
+const fetch = require('node-fetch');
+const { Readable } = require('stream');
+async function requestChatCompletion(prompt, onToken) {
+  const apiUrl = process.env.COPILOT_LOCAL_API_URL || 'http://localhost:8081/openai/v1/chat/completions';
+  try {
+    const res = await fetch(apiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'local-rag',
+        messages: [{ role: 'user', content: prompt }],
+        stream: !!onToken
+      })
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    if (onToken) {
+      // Streaming: procesar línea a línea (formato OpenAI)
+      const reader = res.body.getReader();
+      let buffer = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += Buffer.from(value).toString('utf8');
+        let lines = buffer.split('\n');
+        buffer = lines.pop();
+        for (const line of lines) {
+          if (line.startsWith('data:')) {
+            const json = line.replace('data:', '').trim();
+            if (json && json !== '[DONE]') {
+              try {
+                const delta = JSON.parse(json);
+                const token = delta.choices?.[0]?.delta?.content;
+                if (token) onToken(token);
+              } catch {}
+            }
+          }
+        }
+      }
+      return { choices: [{ message: { content: '' } }] };
+    } else {
+      const data = await res.json();
+      return data;
+    }
+  } catch (err) {
+    return {
+      choices: [{ message: { content: 'Error al consultar backend: ' + (err.message || String(err)) } }],
+    };
+  }
+}
+
+module.exports = {
+  activate,
+  deactivate,
+  requestChatCompletion,
+};
