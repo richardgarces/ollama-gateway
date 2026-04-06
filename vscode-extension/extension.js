@@ -362,6 +362,48 @@ async function requestChatCompletion(prompt, model, metrics) {
   }
 }
 
+function streamAgentAutopilot(task, model, wsContext, onEvent, onDone) {
+  const { apiUrl, jwtToken } = getConfig();
+  const url = new URL(apiUrl + '/api/agent/autopilot');
+  const lib = url.protocol === 'https:' ? https : http;
+  let finished = false;
+
+  const finish = (err) => {
+    if (finished) return;
+    finished = true;
+    onDone(err);
+  };
+
+  const body = JSON.stringify({ task, model: model || '', context: wsContext || {} });
+  const headers = { 'Content-Type': 'application/json' };
+  if (jwtToken) headers['Authorization'] = 'Bearer ' + jwtToken;
+
+  const req = lib.request(url, { method: 'POST', headers }, (res) => {
+    let buf = '';
+    res.on('data', (raw) => {
+      buf += raw.toString();
+      const lines = buf.split('\n');
+      buf = lines.pop() || '';
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || !trimmed.startsWith('data:')) continue;
+        const payload = trimmed.slice(5).trim();
+        if (payload === '[DONE]') { finish(); return; }
+        try {
+          const ev = JSON.parse(payload);
+          if (ev && ev.event) onEvent(ev);
+        } catch {}
+      }
+    });
+    res.on('end', () => finish());
+    res.on('error', (e) => finish(e));
+  });
+
+  req.on('error', (e) => finish(e));
+  req.write(body);
+  req.end();
+}
+
 function streamHTTP(prompt, model, onChunk, onDone, abortCtl, metrics) {
   const { apiUrl, jwtToken, lang, temperature } = getConfig();
   const finalPrompt = applyPromptRC(prompt);
@@ -538,7 +580,26 @@ function streamWS(prompt, model, onChunk, onDone, abortCtl, metrics) {
 function streamCLI(prompt, model, onChunk, onDone) {
   const { cliPath, chatModel } = getConfig();
   const finalPrompt = applyPromptRC(prompt);
-  const resolved = cliPath || path.join(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '.', 'api', 'bin', 'copilot-cli');
+  let resolved = cliPath;
+  if (!resolved) {
+    // Try to find copilot-cli in PATH first, then fallback to workspace location
+    const which = require('child_process').spawnSync('which', ['copilot-cli'], { encoding: 'utf8' });
+    if (which.status === 0 && which.stdout.trim()) {
+      resolved = which.stdout.trim();
+    } else {
+      const wsPath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      if (wsPath) {
+        const candidate = path.join(wsPath, 'api', 'bin', 'copilot-cli');
+        if (require('fs').existsSync(candidate)) {
+          resolved = candidate;
+        }
+      }
+    }
+  }
+  if (!resolved) {
+    onDone(new Error('copilot-cli no encontrado. Configura copilotLocal.cliPath en Settings o asegúrate de que el binario esté en el PATH.'));
+    return;
+  }
   const proc = spawn(resolved, ['--model', model || chatModel, '--prompt', finalPrompt], { stdio: ['pipe', 'pipe', 'pipe'] });
   proc.stdout.on('data', (d) => onChunk(d.toString()));
   proc.stderr.on('data', (d) => onChunk(d.toString()));
@@ -1061,8 +1122,15 @@ function sendNow(text) {
   addMessage('user', text);
   sendBtn.disabled = true;
   if (stopBtn) stopBtn.disabled = false;
-  startAssistant();
-  vscode.postMessage({ type: 'chat', text, model: modelsEl.value || '' });
+  if (text.trim().toLowerCase().startsWith('/agent')) {
+    const task = text.replace(/^\\/agent\\s*/i, '').trim();
+    if (!task) { addMessage('assistant', 'Uso: /agent <descripción de la tarea>'); sendBtn.disabled = false; return; }
+    addMessage('assistant', '🤖 Agent Autopilot ejecutando...');
+    vscode.postMessage({ type: 'agentChat', task, model: modelsEl.value || '' });
+  } else {
+    startAssistant();
+    vscode.postMessage({ type: 'chat', text, model: modelsEl.value || '' });
+  }
 }
 
 function setRegressionDraft(text) {
@@ -1243,6 +1311,12 @@ window.addEventListener('message', (e) => {
   if (msg.type === 'chunk') { updatePending(msg.text || ''); return; }
   if (msg.type === 'done') { pending = null; sendBtn.disabled = false; if (stopBtn) stopBtn.disabled = true; return; }
   if (msg.type === 'error') { updatePending('\\n[Error: ' + (msg.text || 'unknown') + ']'); pending = null; sendBtn.disabled = false; if (stopBtn) stopBtn.disabled = true; return; }
+  if (msg.type === 'agentThinking') { addMessage('assistant', '💭 ' + (msg.content || '')); return; }
+  if (msg.type === 'agentToolCall') { addMessage('assistant', '🔧 ' + (msg.tool || '') + '(' + JSON.stringify(msg.args || {}) + ')'); return; }
+  if (msg.type === 'agentToolResult') { addMessage('assistant', (msg.success ? '✅' : '❌') + ' ' + (msg.output || '').substring(0, 500)); return; }
+  if (msg.type === 'agentAnswer') { addMessage('assistant', msg.content || ''); return; }
+  if (msg.type === 'agentDone') { sendBtn.disabled = false; if (stopBtn) stopBtn.disabled = true; return; }
+  if (msg.type === 'agentError') { addMessage('assistant', '[Error: ' + (msg.text || 'unknown') + ']'); sendBtn.disabled = false; if (stopBtn) stopBtn.disabled = true; return; }
   if (msg.type === 'prefill') { promptEl.value = msg.text || ''; promptEl.focus(); return; }
   if (msg.type === 'runPrompt') { sendNow(msg.text || ''); return; }
   if (msg.type === 'externalResult') { addMessage('assistant', msg.text || ''); return; }
@@ -1399,6 +1473,40 @@ pre:hover .code-actions { opacity: 1; }
 
 button.secondary { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); border: 1px solid var(--border); }
 
+/* ── Agent Autopilot Steps ── */
+.agent-steps { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.agent-step { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; font-size: 12px; }
+.agent-step-header { display: flex; align-items: center; gap: 6px; padding: 6px 10px; background: var(--code-bg); cursor: pointer; user-select: none; }
+.agent-step-header:hover { background: var(--hover-bg); }
+.agent-step-icon { font-size: 13px; flex-shrink: 0; }
+.agent-step-label { flex: 1; font-weight: 600; }
+.agent-step-badge { font-size: 10px; padding: 1px 6px; border-radius: 8px; }
+.agent-step-badge.success { background: color-mix(in srgb, var(--vscode-testing-iconPassed) 18%, transparent); color: var(--vscode-testing-iconPassed); }
+.agent-step-badge.error { background: color-mix(in srgb, var(--vscode-errorForeground) 18%, transparent); color: var(--vscode-errorForeground); }
+.agent-step-badge.running { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
+.agent-step-body { display: none; padding: 6px 10px; border-top: 1px solid var(--border); }
+.agent-step-body.open { display: block; }
+.agent-step-body pre { margin: 4px 0; font-size: 11px; max-height: 200px; overflow-y: auto; }
+.agent-thinking { color: var(--muted); font-style: italic; padding: 4px 0; }
+.agent-answer { padding: 6px 0; }
+.agent-progress { display: flex; align-items: center; gap: 6px; padding: 4px 0; font-size: 11px; color: var(--muted); }
+.agent-spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: agentSpin 0.8s linear infinite; }
+@keyframes agentSpin { to { transform: rotate(360deg); } }
+
+.agent-file-op { background: color-mix(in srgb, var(--accent) 8%, transparent); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; margin: 6px 0; }
+.agent-file-op-header { display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 600; }
+.agent-file-op-header .icon { font-size: 14px; }
+.agent-file-op-path { font-family: var(--vscode-editor-font-family, monospace); font-size: 11px; color: var(--accent); word-break: break-all; }
+.agent-file-op-actions { display: flex; gap: 6px; margin-top: 6px; }
+.agent-file-op-actions button { font-size: 11px; padding: 3px 10px; border-radius: 4px; border: 1px solid var(--border); cursor: pointer; background: var(--vscode-button-secondaryBackground, transparent); color: var(--fg); }
+.agent-file-op-actions .accept-btn { background: color-mix(in srgb, var(--vscode-testing-iconPassed) 18%, transparent); color: var(--vscode-testing-iconPassed); border-color: var(--vscode-testing-iconPassed); }
+.agent-file-op-actions .reject-btn { background: color-mix(in srgb, var(--vscode-errorForeground) 18%, transparent); color: var(--vscode-errorForeground); border-color: var(--vscode-errorForeground); }
+.agent-file-op-status { font-size: 10px; margin-top: 4px; font-style: italic; color: var(--muted); }
+.agent-file-op-status.accepted { color: var(--vscode-testing-iconPassed); }
+.agent-file-op-status.rejected { color: var(--vscode-errorForeground); }
+#addFileBtn { background: none; border: 1px solid var(--border); color: var(--muted); border-radius: 4px; padding: 2px 8px; cursor: pointer; font-size: 11px; white-space: nowrap; }
+#addFileBtn:hover { color: var(--fg); border-color: var(--accent); }
+
 @keyframes historyPulse {
   0% { background: color-mix(in srgb, var(--accent) 24%, transparent); }
   100% { background: transparent; }
@@ -1441,6 +1549,7 @@ button.secondary { background: var(--vscode-button-secondaryBackground); color: 
     <button class="suggest-btn" data-prompt="/test"><span class="suggest-label">🧪 Generate Tests</span><span class="suggest-desc">Crea tests para el código seleccionado</span></button>
     <button class="suggest-btn" data-prompt="/refactor"><span class="suggest-label">🔧 Refactor</span><span class="suggest-desc">Mejora la claridad y mantenibilidad</span></button>
     <button class="suggest-btn" data-prompt="/fix"><span class="suggest-label">🐛 Fix Errors</span><span class="suggest-desc">Corrige errores en el código</span></button>
+    <button class="suggest-btn" data-prompt="/agent"><span class="suggest-label">🤖 Agent Autopilot</span><span class="suggest-desc">Ejecuta tareas complejas paso a paso</span></button>
   </div>
 </div>
 
@@ -1451,6 +1560,7 @@ button.secondary { background: var(--vscode-button-secondaryBackground); color: 
 <div id="inputArea">
   <div id="slashPopup"></div>
   <div id="inputRow">
+    <button id="addFileBtn" title="Agregar archivo al contexto">+ 📄</button>
     <div id="voiceControls">
       <button id="micBtn" title="Dictado por voz">🎙</button>
       <span id="voiceStatus" data-state="stopped"></span>
@@ -1489,6 +1599,7 @@ const modelsHealthEl = document.getElementById('modelsHealth');
 const sessionBannerEl = document.getElementById('sessionBanner');
 const slashPopupEl = document.getElementById('slashPopup');
 const contextChipsEl = document.getElementById('contextChips');
+const addFileBtnEl = document.getElementById('addFileBtn');
 const voiceEnabled = ${voiceInputEnabled ? 'true' : 'false'};
 let pending = null;
 const chatHistory = [];
@@ -1506,6 +1617,7 @@ const SLASH_COMMANDS = [
   { cmd: '/fix', desc: 'Corrige errores en el código' },
   { cmd: '/refactor', desc: 'Refactoriza para mayor claridad' },
   { cmd: '/doc', desc: 'Agrega documentación/docstrings' },
+  { cmd: '/agent', desc: 'Modo autopilot: ejecuta tareas paso a paso' },
 ];
 
 function sanitizeHTML(text) {
@@ -1721,6 +1833,163 @@ function updatePending(text) {
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
+let agentPending = null;
+let agentStepsContainer = null;
+
+function startAgentAssistant() {
+  hideWelcome();
+  const msgId = generateMessageId();
+  const d = document.createElement('div');
+  d.className = 'msg assistant';
+  d.dataset.msgId = msgId;
+
+  const header = document.createElement('div');
+  header.className = 'msg-header';
+  const avatar = document.createElement('div');
+  avatar.className = 'msg-avatar';
+  avatar.textContent = '🤖';
+  const roleLabel = document.createElement('span');
+  roleLabel.className = 'msg-role';
+  roleLabel.textContent = 'Agent Autopilot';
+  header.appendChild(avatar);
+  header.appendChild(roleLabel);
+
+  const contentEl = document.createElement('div');
+  contentEl.className = 'msg-content';
+
+  const progress = document.createElement('div');
+  progress.className = 'agent-progress';
+  progress.id = 'agentProgress';
+  progress.innerHTML = '<span class="agent-spinner"></span> Ejecutando...';
+
+  const steps = document.createElement('div');
+  steps.className = 'agent-steps';
+  steps.id = 'agentSteps';
+
+  contentEl.appendChild(progress);
+  contentEl.appendChild(steps);
+  d.appendChild(header);
+  d.appendChild(contentEl);
+  messagesEl.appendChild(d);
+  chatHistory.push({ id: msgId, role: 'assistant', content: '[Agent Autopilot]', timestamp: Date.now() });
+  scheduleHistorySync();
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+
+  agentPending = d;
+  agentStepsContainer = steps;
+  return d;
+}
+
+function addAgentThinking(iteration, content) {
+  if (!agentStepsContainer) return;
+  const step = document.createElement('div');
+  step.className = 'agent-step';
+  step.innerHTML = '<div class="agent-step-header"><span class="agent-step-icon">💭</span><span class="agent-step-label">Paso ' + iteration + ': Pensando</span><span class="agent-step-badge running">thinking</span></div>' +
+    '<div class="agent-step-body open"><div class="agent-thinking">' + sanitizeHTML(content) + '</div></div>';
+  agentStepsContainer.appendChild(step);
+  step.querySelector('.agent-step-header').addEventListener('click', () => step.querySelector('.agent-step-body').classList.toggle('open'));
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+function addAgentToolCall(iteration, tool, args) {
+  if (!agentStepsContainer) return;
+  const argsStr = args ? Object.entries(args).map(([k,v]) => sanitizeHTML(k) + '=' + sanitizeHTML(String(v).substring(0, 80))).join(', ') : '';
+  const step = document.createElement('div');
+  step.className = 'agent-step';
+  step.dataset.iteration = iteration;
+  step.dataset.tool = tool;
+  step.innerHTML = '<div class="agent-step-header"><span class="agent-step-icon">🔧</span><span class="agent-step-label">' + sanitizeHTML(tool) + '(' + argsStr + ')</span><span class="agent-step-badge running">running</span></div>' +
+    '<div class="agent-step-body"></div>';
+  agentStepsContainer.appendChild(step);
+  step.querySelector('.agent-step-header').addEventListener('click', () => step.querySelector('.agent-step-body').classList.toggle('open'));
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+function addAgentToolResult(iteration, tool, success, output) {
+  if (!agentStepsContainer) return;
+  const existing = agentStepsContainer.querySelector('[data-iteration="' + iteration + '"][data-tool="' + tool + '"]');
+  const target = existing || agentStepsContainer.lastElementChild;
+  if (!target) return;
+  const badge = target.querySelector('.agent-step-badge');
+  if (badge) { badge.className = 'agent-step-badge ' + (success ? 'success' : 'error'); badge.textContent = success ? 'ok' : 'error'; }
+  const body = target.querySelector('.agent-step-body');
+  if (body) {
+    const truncated = String(output || '').substring(0, 2000);
+    body.innerHTML = '<pre><code>' + sanitizeHTML(truncated) + '</code></pre>';
+    body.classList.add('open');
+  }
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+function addAgentAnswer(content) {
+  if (!agentStepsContainer) return;
+  const progressEl = agentPending?.querySelector('#agentProgress');
+  if (progressEl) progressEl.remove();
+  const answer = document.createElement('div');
+  answer.className = 'agent-answer';
+  answer.innerHTML = renderMarkdownWithCode(content);
+  attachCodeActions(answer);
+  agentStepsContainer.parentElement.appendChild(answer);
+  const item = chatHistory.find((h) => h.id === agentPending?.dataset.msgId);
+  if (item) { item.content = '[Agent Autopilot]\\n' + content; scheduleHistorySync(); }
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+function finishAgent() {
+  const progressEl = agentPending?.querySelector('#agentProgress');
+  if (progressEl) progressEl.remove();
+  agentPending = null;
+  agentStepsContainer = null;
+  sendBtn.disabled = false;
+  sendBtn.style.display = 'flex';
+  stopBtn.style.display = 'none';
+}
+
+let fileOpCounter = 0;
+function addAgentFileOp(type, iteration, filePath, opId) {
+  if (!agentStepsContainer) return null;
+  if (!opId) opId = 'fileop-' + (++fileOpCounter);
+  const icon = type === 'create' ? '🆕' : '✏️';
+  const label = type === 'create' ? 'Crear archivo' : 'Modificar archivo';
+  const step = document.createElement('div');
+  step.className = 'agent-step';
+  step.innerHTML =
+    '<div class="agent-step-header"><span class="agent-step-icon">' + icon + '</span><span class="agent-step-label">Paso ' + iteration + ': ' + label + '</span><span class="agent-step-badge running">pendiente</span></div>' +
+    '<div class="agent-step-body open">' +
+      '<div class="agent-file-op" id="' + opId + '">' +
+        '<div class="agent-file-op-header"><span class="icon">' + icon + '</span><span>' + label + '</span></div>' +
+        '<div class="agent-file-op-path">' + sanitizeHTML(filePath) + '</div>' +
+        '<div class="agent-file-op-actions">' +
+          '<button class="accept-btn" data-opid="' + opId + '" data-path="' + sanitizeHTML(filePath) + '" data-action="accept">✓ Aceptar</button>' +
+          '<button class="reject-btn" data-opid="' + opId + '" data-path="' + sanitizeHTML(filePath) + '" data-action="reject">✗ Rechazar</button>' +
+        '</div>' +
+        '<div class="agent-file-op-status" id="' + opId + '-status"></div>' +
+      '</div>' +
+    '</div>';
+  agentStepsContainer.appendChild(step);
+  step.querySelector('.accept-btn').addEventListener('click', (e) => {
+    vscode.postMessage({ type: 'acceptFileOp', opId });
+  });
+  step.querySelector('.reject-btn').addEventListener('click', (e) => {
+    vscode.postMessage({ type: 'rejectFileOp', opId });
+    updateFileOpStatus(opId, 'rejected', 'Cambios rechazados');
+  });
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+  return opId;
+}
+
+function updateFileOpStatus(opId, status, text) {
+  const badge = document.querySelector('#' + opId)?.closest('.agent-step')?.querySelector('.agent-step-badge');
+  const statusEl = document.getElementById(opId + '-status');
+  const actionsEl = document.querySelector('#' + opId + ' .agent-file-op-actions');
+  if (badge) {
+    badge.textContent = status === 'accepted' ? 'aceptado' : 'rechazado';
+    badge.className = 'agent-step-badge ' + (status === 'accepted' ? 'success' : 'error');
+  }
+  if (statusEl) { statusEl.textContent = text; statusEl.className = 'agent-file-op-status ' + status; }
+  if (actionsEl) actionsEl.remove();
+}
+
 function resetHistoryUI() {
   messagesEl.innerHTML = '';
   chatHistory.length = 0;
@@ -1759,8 +2028,15 @@ function sendNow(text) {
   sendBtn.disabled = true;
   sendBtn.style.display = 'none';
   stopBtn.style.display = 'flex';
-  startAssistant();
-  vscode.postMessage({ type: 'chat', text, model: modelsEl.value || '' });
+  if (text.trim().toLowerCase().startsWith('/agent')) {
+    const task = text.replace(/^\\/agent\\s*/i, '').trim();
+    if (!task) { addMessage('assistant', 'Uso: /agent <descripción de la tarea>'); sendBtn.disabled = false; sendBtn.style.display = 'flex'; stopBtn.style.display = 'none'; return; }
+    startAgentAssistant();
+    vscode.postMessage({ type: 'agentChat', task, model: modelsEl.value || '', contextFiles: getContextFiles() });
+  } else {
+    startAssistant();
+    vscode.postMessage({ type: 'chat', text, model: modelsEl.value || '' });
+  }
 }
 
 function setRegressionDraft(text) { regressionPromptDraft = String(text || '').trim(); }
@@ -1882,6 +2158,16 @@ codeOnlyToggleEl.addEventListener('click', () => {
   rerenderChatKeepingScroll();
 });
 profileBadgeEl.addEventListener('click', () => { vscode.postMessage({ type: 'switchProfile' }); });
+addFileBtnEl.addEventListener('click', () => { vscode.postMessage({ type: 'pickContextFile' }); });
+
+function getContextFiles() {
+  const files = [];
+  contextChipsEl.querySelectorAll('.ctx-chip').forEach(chip => {
+    const p = chip.dataset.path;
+    if (p) files.push(p);
+  });
+  return files;
+}
 
 /* Welcome suggestions */
 document.querySelectorAll('.suggest-btn').forEach((btn) => {
@@ -1899,6 +2185,20 @@ window.addEventListener('message', (e) => {
   if (msg.type === 'chunk') { updatePending(msg.text || ''); return; }
   if (msg.type === 'done') { pending = null; sendBtn.disabled = false; sendBtn.style.display = 'flex'; stopBtn.style.display = 'none'; return; }
   if (msg.type === 'error') { updatePending('\\n[Error: ' + (msg.text || 'unknown') + ']'); pending = null; sendBtn.disabled = false; sendBtn.style.display = 'flex'; stopBtn.style.display = 'none'; return; }
+  if (msg.type === 'agentThinking') { addAgentThinking(msg.iteration || 0, msg.content || ''); return; }
+  if (msg.type === 'agentToolCall') { addAgentToolCall(msg.iteration || 0, msg.tool || '', msg.args); return; }
+  if (msg.type === 'agentToolResult') { addAgentToolResult(msg.iteration || 0, msg.tool || '', !!msg.success, msg.output || ''); return; }
+  if (msg.type === 'agentAnswer') { addAgentAnswer(msg.content || ''); return; }
+  if (msg.type === 'agentDone') { finishAgent(); return; }
+  if (msg.type === 'agentError') { addAgentAnswer('[Error: ' + (msg.text || 'unknown') + ']'); finishAgent(); return; }
+  if (msg.type === 'agentFileCreate') { addAgentFileOp('create', msg.iteration || 0, msg.path || '', msg.opId || ''); return; }
+  if (msg.type === 'agentFileModify') { addAgentFileOp('modify', msg.iteration || 0, msg.path || '', msg.opId || ''); return; }
+  if (msg.type === 'agentFileResult') {
+    const opId = msg.opId || '';
+    const accepted = !!msg.accepted;
+    updateFileOpStatus(opId, accepted ? 'accepted' : 'rejected', accepted ? 'Archivo guardado ✓' : 'Cambios descartados');
+    return;
+  }
   if (msg.type === 'prefill') { promptEl.value = msg.text || ''; promptEl.focus(); return; }
   if (msg.type === 'runPrompt') { sendNow(msg.text || ''); return; }
   if (msg.type === 'externalResult') { addMessage('assistant', msg.text || ''); return; }
@@ -1926,6 +2226,7 @@ window.addEventListener('message', (e) => {
     if (!file) return;
     const chip = document.createElement('span');
     chip.className = 'ctx-chip';
+    chip.dataset.path = file;
     chip.innerHTML = '📄 ' + sanitizeHTML(file.split('/').pop() || file) + '<span class="remove" title="Remove">×</span>';
     chip.querySelector('.remove').addEventListener('click', () => chip.remove());
     contextChipsEl.appendChild(chip);
@@ -2145,6 +2446,110 @@ function activate(context) {
     return ok;
   };
 
+  // ── Workspace context gathering for agent autopilot ──
+  const gatherWorkspaceContext = async (extraFiles) => {
+    const ctx = { tree: [], files: [] };
+    const wsFolder = vscode.workspace.workspaceFolders?.[0];
+    if (!wsFolder) return ctx;
+
+    // 1. Get workspace file tree (exclude heavy dirs)
+    try {
+      const uris = await vscode.workspace.findFiles('**/*', '{**/node_modules/**,**/.git/**,**/vendor/**,**/dist/**,**/build/**,**/*.exe,**/*.bin,**/*.wasm}', 500);
+      ctx.tree = uris.map((u) => vscode.workspace.asRelativePath(u)).sort();
+    } catch {}
+
+    // 2. Get content of open/visible editors
+    const seen = new Set();
+    for (const editor of vscode.window.visibleTextEditors) {
+      const rel = vscode.workspace.asRelativePath(editor.document.uri);
+      if (seen.has(rel)) continue;
+      seen.add(rel);
+      const text = editor.document.getText();
+      if (text.length < 50000) {
+        ctx.files.push({ path: rel, content: text });
+      }
+    }
+
+    // 3. Add explicitly selected context files
+    if (Array.isArray(extraFiles)) {
+      for (const filePath of extraFiles) {
+        if (seen.has(filePath)) continue;
+        seen.add(filePath);
+        try {
+          const uri = vscode.Uri.joinPath(wsFolder.uri, filePath);
+          const raw = await vscode.workspace.fs.readFile(uri);
+          const text = Buffer.from(raw).toString('utf8');
+          if (text.length < 50000) {
+            ctx.files.push({ path: filePath, content: text });
+          }
+        } catch {}
+      }
+    }
+
+    return ctx;
+  };
+
+  // ── File operation handlers for agent autopilot ──
+  const handleAgentFileCreate = async (filePath, content, webview) => {
+    const wsFolder = vscode.workspace.workspaceFolders?.[0];
+    if (!wsFolder) { vscode.window.showErrorMessage('No hay workspace abierto'); return; }
+
+    const uri = vscode.Uri.joinPath(wsFolder.uri, filePath);
+    // Show proposed content in a temporary document
+    const doc = await vscode.workspace.openTextDocument({ content, language: guessLanguageFromPath(filePath) });
+    await vscode.window.showTextDocument(doc, { preview: true, viewColumn: vscode.ViewColumn.Beside });
+
+    const decision = await vscode.window.showInformationMessage(
+      '🤖 Agent propone crear: ' + filePath, 'Crear archivo', 'Descartar'
+    );
+    if (decision === 'Crear archivo') {
+      await vscode.workspace.fs.writeFile(uri, Buffer.from(content, 'utf8'));
+      vscode.window.showInformationMessage('Archivo creado: ' + filePath);
+      webview.postMessage({ type: 'agentFileResult', path: filePath, action: 'create', accepted: true });
+    } else {
+      webview.postMessage({ type: 'agentFileResult', path: filePath, action: 'create', accepted: false });
+    }
+  };
+
+  const handleAgentFileModify = async (filePath, proposedContent, webview) => {
+    const wsFolder = vscode.workspace.workspaceFolders?.[0];
+    if (!wsFolder) { vscode.window.showErrorMessage('No hay workspace abierto'); return; }
+
+    const uri = vscode.Uri.joinPath(wsFolder.uri, filePath);
+    let originalContent = '';
+    try {
+      const raw = await vscode.workspace.fs.readFile(uri);
+      originalContent = Buffer.from(raw).toString('utf8');
+    } catch {
+      // File doesn't exist yet, treat as create
+      return handleAgentFileCreate(filePath, proposedContent, webview);
+    }
+
+    const lang = guessLanguageFromPath(filePath);
+    const originalDoc = await vscode.workspace.openTextDocument({ content: originalContent, language: lang });
+    const proposedDoc = await vscode.workspace.openTextDocument({ content: proposedContent, language: lang });
+    await vscode.commands.executeCommand('vscode.diff', originalDoc.uri, proposedDoc.uri, '🤖 Agent: ' + filePath + ' (cambios propuestos)', { preview: true, viewColumn: vscode.ViewColumn.Beside });
+
+    const decision = await vscode.window.showInformationMessage(
+      '🤖 Agent propone modificar: ' + filePath, 'Aplicar cambios', 'Descartar'
+    );
+    if (decision === 'Aplicar cambios') {
+      await vscode.workspace.fs.writeFile(uri, Buffer.from(proposedContent, 'utf8'));
+      vscode.window.showInformationMessage('Archivo modificado: ' + filePath);
+      webview.postMessage({ type: 'agentFileResult', path: filePath, action: 'modify', accepted: true });
+    } else {
+      webview.postMessage({ type: 'agentFileResult', path: filePath, action: 'modify', accepted: false });
+    }
+  };
+
+  const guessLanguageFromPath = (p) => {
+    const ext = String(p || '').split('.').pop()?.toLowerCase() || '';
+    const map = { js: 'javascript', ts: 'typescript', go: 'go', py: 'python', rs: 'rust', java: 'java', rb: 'ruby', md: 'markdown', json: 'json', yaml: 'yaml', yml: 'yaml', html: 'html', css: 'css', sh: 'shellscript', bash: 'shellscript', sql: 'sql', xml: 'xml', toml: 'toml' };
+    return map[ext] || 'plaintext';
+  };
+
+  const pendingFileOps = new Map();
+
   const setupWebviewMessageHandler = (webview, source) => {
     webview.onDidReceiveMessage(async (msg) => {
       if (msg.type === 'cancelChat') {
@@ -2180,6 +2585,72 @@ function activate(context) {
             else webview.postMessage({ type: 'done' });
           },
         );
+        return;
+      }
+      if (msg.type === 'agentChat') {
+        const task = String(msg.task || '').trim();
+        const model = String(msg.model || getConfig().chatModel);
+        const extraFiles = Array.isArray(msg.contextFiles) ? msg.contextFiles : [];
+        if (!task) { webview.postMessage({ type: 'agentError', text: 'Tarea vacía' }); return; }
+        const wsContext = await gatherWorkspaceContext(extraFiles);
+        let fileOpSeq = 0;
+        streamAgentAutopilot(task, model, wsContext,
+          (ev) => {
+            if (ev.event === 'thinking') webview.postMessage({ type: 'agentThinking', iteration: ev.iteration, content: ev.content });
+            else if (ev.event === 'tool_call') webview.postMessage({ type: 'agentToolCall', iteration: ev.iteration, tool: ev.tool, args: ev.args });
+            else if (ev.event === 'tool_result') webview.postMessage({ type: 'agentToolResult', iteration: ev.iteration, tool: ev.tool, success: ev.success, output: ev.output });
+            else if (ev.event === 'answer') webview.postMessage({ type: 'agentAnswer', content: ev.content });
+            else if (ev.event === 'error') webview.postMessage({ type: 'agentError', text: ev.content });
+            else if (ev.event === 'file_create') {
+              const opId = 'fileop-' + (++fileOpSeq);
+              pendingFileOps.set(opId, { type: 'create', path: ev.file_path, content: ev.file_content });
+              webview.postMessage({ type: 'agentFileCreate', iteration: ev.iteration, path: ev.file_path, opId });
+            }
+            else if (ev.event === 'file_modify') {
+              const opId = 'fileop-' + (++fileOpSeq);
+              pendingFileOps.set(opId, { type: 'modify', path: ev.file_path, content: ev.file_content });
+              webview.postMessage({ type: 'agentFileModify', iteration: ev.iteration, path: ev.file_path, opId });
+            }
+          },
+          (err) => {
+            if (err) webview.postMessage({ type: 'agentError', text: err.message || String(err) });
+            else webview.postMessage({ type: 'agentDone' });
+          },
+        );
+        return;
+      }
+      if (msg.type === 'pickContextFile') {
+        const wsFolder = vscode.workspace.workspaceFolders?.[0];
+        if (!wsFolder) return;
+        const uris = await vscode.window.showOpenDialog({
+          canSelectMany: true,
+          defaultUri: wsFolder.uri,
+          openLabel: 'Agregar al contexto',
+        });
+        if (!uris || uris.length === 0) return;
+        for (const uri of uris) {
+          const rel = vscode.workspace.asRelativePath(uri);
+          webview.postMessage({ type: 'contextFile', file: rel });
+        }
+        return;
+      }
+      if (msg.type === 'acceptFileOp') {
+        const opId = msg.opId;
+        const op = pendingFileOps.get(opId);
+        if (!op) return;
+        pendingFileOps.delete(opId);
+        if (op.type === 'create') {
+          await handleAgentFileCreate(op.path, op.content, webview);
+        } else {
+          await handleAgentFileModify(op.path, op.content, webview);
+        }
+        webview.postMessage({ type: 'agentFileResult', opId, accepted: true });
+        return;
+      }
+      if (msg.type === 'rejectFileOp') {
+        const opId = msg.opId;
+        pendingFileOps.delete(opId);
+        webview.postMessage({ type: 'agentFileResult', opId, accepted: false });
         return;
       }
       if (msg.type === 'compare') {

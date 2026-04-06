@@ -174,6 +174,7 @@ func GetRouteDefinitions() []RouteDefinition {
 		{Method: "POST", Path: "/api/v2/generate", Description: "Generacion simple (v2, acepta aliases query/input)", ExampleBody: "{\n  \"prompt\": \"Resume este texto\",\n  \"stream\": false\n}", Protected: true},
 		{Method: "POST", Path: "/api/agent", Description: "Ejecucion de agente", ExampleBody: "{\n  \"input\": \"Analiza el repo\"\n}", Protected: true},
 		{Method: "POST", Path: "/api/agent/plan", Description: "Ejecutar plan multi-step para agente", ExampleBody: "{\n  \"steps\": [\n    {\"id\":\"step-1\",\"input\":\"analiza error\",\"retry_limit\":2,\"backoff_ms\":400},\n    {\"id\":\"step-2\",\"input\":\"sugiere fix\"}\n  ]\n}", Protected: true},
+		{Method: "POST", Path: "/api/agent/autopilot", Description: "Agente autopilot con loop iterativo (SSE)", ExampleBody: "{\n  \"task\": \"Analiza la estructura del repo y sugiere mejoras\",\n  \"model\": \"qwen2.5:7b\"\n}", Protected: true},
 		{Method: "POST", Path: "/api/flags", Description: "Crear feature flag", ExampleBody: "{\n  \"tenant\": \"default\",\n  \"feature\": \"postmortem\",\n  \"enabled\": true,\n  \"rollout_percentage\": 100\n}", Protected: true},
 		{Method: "GET", Path: "/api/flags", Description: "Listar feature flags", ExampleBody: "", Protected: true},
 		{Method: "GET", Path: "/api/flags/{feature}", Description: "Obtener feature flag por feature", ExampleBody: "", Protected: true},
@@ -286,6 +287,7 @@ func (s *Server) setupRoutes() {
 	routerService := coreservice.NewRouterService(s.cfg, ollamaService, logger)
 	toolRegistry := coreservice.NewToolRegistry(s.cfg.AgentToolsDir, s.cfg.RepoRoot, logger)
 	agentService := agentservice.NewService(ollamaService, logger, toolRegistry)
+	autopilotService := agentservice.NewAutopilotService(ollamaService, logger, toolRegistry)
 	conversationService, err := coreservice.NewConversationServiceWithPool(
 		s.cfg.MongoURI,
 		s.cfg.MongoPoolMaxOpen,
@@ -522,6 +524,7 @@ func (s *Server) setupRoutes() {
 	generateHandler := generatetransport.NewHandler(ragEngine)
 	generateHandler.SetEventPublisher(eventBus)
 	agentHandler := agenttransport.NewHandler(agentRunner)
+	autopilotHandler := agenttransport.NewAutopilotHandler(autopilotService)
 	plannerHandler := plannertransport.NewHandler(plannerService)
 	flagsHandler := flagstransport.NewHandler(flagsSvc)
 	postmortemHandler := postmortemtransport.NewHandler(postmortemService)
@@ -680,6 +683,7 @@ func (s *Server) setupRoutes() {
 		httputil.WriteJSON(w, http.StatusOK, map[string]string{"tenant": middleware.TenantFromContext(r.Context())})
 	})))
 	mux.Handle("POST /api/agent/plan", authMiddleware.JWT(http.HandlerFunc(plannerHandler.ExecutePlan)))
+	mux.Handle("POST /api/agent/autopilot", authMiddleware.JWT(http.HandlerFunc(autopilotHandler.Handle)))
 	mux.Handle("POST /api/flags", authMiddleware.JWT(http.HandlerFunc(flagsHandler.Create)))
 	mux.Handle("GET /api/flags", authMiddleware.JWT(http.HandlerFunc(flagsHandler.List)))
 	mux.Handle("GET /api/flags/{feature}", authMiddleware.JWT(http.HandlerFunc(flagsHandler.Get)))
