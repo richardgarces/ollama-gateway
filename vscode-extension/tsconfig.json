@@ -10,6 +10,7 @@
     "skipLibCheck": true,
     "sourceMap": false,
     "moduleResolution": "node",
+    "ignoreDeprecations": "6.0",
     "types": ["node", "vscode"]
   },
   "include": ["src/**/*.ts"]
