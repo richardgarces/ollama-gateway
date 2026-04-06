@@ -39,6 +39,7 @@ const path = __importStar(require("path"));
 const vscode = __importStar(require("vscode"));
 const node_1 = require("vscode-languageclient/node");
 const workingSetView_1 = require("./workingSetView");
+const chatView_1 = require("./chatView");
 const jupyterNotebookSerializer_1 = require("./jupyterNotebookSerializer");
 let legacy;
 let client;
@@ -67,6 +68,87 @@ function startLsp(context) {
     context.subscriptions.push({ dispose: () => { void client?.stop(); } });
 }
 async function activate(context) {
+    // === Registro de comandos principales Copilot Local ===
+    // 1. Send Selection
+    context.subscriptions.push(vscode.commands.registerCommand('copilot-local.sendSelection', async () => {
+        const editor = vscode.window.activeTextEditor;
+        if (!editor) {
+            vscode.window.showWarningMessage('No hay editor activo.');
+            return;
+        }
+        const selection = editor.selection.isEmpty ? editor.document.getText() : editor.document.getText(editor.selection);
+        const output = vscode.window.createOutputChannel('Copilot Local');
+        output.show(true);
+        output.appendLine('⏳ Enviando selección al gateway...');
+        try {
+            // eslint-disable-next-line @typescript-eslint/no-var-requires
+            const legacy = require('../extension.js');
+            if (typeof legacy.requestChatCompletion === 'function') {
+                const res = await legacy.requestChatCompletion(selection);
+                output.appendLine(res?.choices?.[0]?.message?.content || 'Sin respuesta.');
+            }
+            else {
+                output.appendLine('Handler legacy no disponible.');
+            }
+        }
+        catch (err) {
+            output.appendLine('Error: ' + (err?.message || String(err)));
+        }
+    }));
+    // 2. Open Chat Panel
+    context.subscriptions.push(vscode.commands.registerCommand('copilot-local.openChat', async () => {
+        await vscode.commands.executeCommand('workbench.view.extension.copilotLocal');
+        await vscode.commands.executeCommand('copilotLocal.chatView.focus');
+    }));
+    // 3. Quick Prompt (plantillas rápidas)
+    context.subscriptions.push(vscode.commands.registerCommand('copilot-local.quickPrompt', async () => {
+        const cfg = vscode.workspace.getConfiguration('copilotLocal');
+        const templates = cfg.get('quickPromptTemplates') || {};
+        const keys = Object.keys(templates);
+        if (keys.length === 0) {
+            vscode.window.showInformationMessage('No hay plantillas rápidas configuradas.');
+            return;
+        }
+        const pick = await vscode.window.showQuickPick(keys, { placeHolder: 'Selecciona una plantilla' });
+        if (!pick)
+            return;
+        const editor = vscode.window.activeTextEditor;
+        if (!editor)
+            return;
+        const selection = editor.selection.isEmpty ? '' : editor.document.getText(editor.selection);
+        const template = templates[pick].replace('{{selection}}', selection);
+        await vscode.commands.executeCommand('copilot-local.openChat');
+        // Enviar al input del chat (requiere integración JS adicional si se quiere autofill)
+        vscode.window.showInformationMessage('Plantilla copiada al input del chat: ' + template);
+    }));
+    // 4. Search Chat History (dummy)
+    context.subscriptions.push(vscode.commands.registerCommand('copilot-local.searchHistory', async () => {
+        vscode.window.showInformationMessage('Funcionalidad de búsqueda de historial aún no implementada.');
+    }));
+    // 5. Compare Models (dummy)
+    context.subscriptions.push(vscode.commands.registerCommand('copilot-local.compareModels', async () => {
+        vscode.window.showInformationMessage('Funcionalidad de comparación de modelos aún no implementada.');
+    }));
+    // 6. Open Favorites (dummy)
+    context.subscriptions.push(vscode.commands.registerCommand('copilot-local.openFavorites', async () => {
+        vscode.window.showInformationMessage('Funcionalidad de favoritos aún no implementada.');
+    }));
+    // 7. Switch Workspace Profile (dummy)
+    context.subscriptions.push(vscode.commands.registerCommand('copilot-local.switchProfile', async () => {
+        vscode.window.showInformationMessage('Cambio de perfil aún no implementado.');
+    }));
+    // 8. Clear Session State (dummy)
+    context.subscriptions.push(vscode.commands.registerCommand('copilot-local.clearSessionState', async () => {
+        vscode.window.showInformationMessage('Limpieza de sesión aún no implementada.');
+    }));
+    // 9. Explain Test Failure (dummy)
+    context.subscriptions.push(vscode.commands.registerCommand('copilot-local.explainTestFailure', async () => {
+        vscode.window.showInformationMessage('Explicación de fallo de test aún no implementada.');
+    }));
+    // 10. Reset Quality Alerts (dummy)
+    context.subscriptions.push(vscode.commands.registerCommand('copilot-local.resetQualityAlerts', async () => {
+        vscode.window.showInformationMessage('Reset de alertas de calidad aún no implementado.');
+    }));
     // Integración nativa con API de Chat VS Code
     if (vscode.chat && typeof vscode.chat.createChatParticipant === 'function') {
         const handler = async (request, _ctx, stream, _token) => {
@@ -129,6 +211,9 @@ async function activate(context) {
     // Registrar la nueva vista Working Set
     const workingSetProvider = new workingSetView_1.CopilotWorkingSetViewProvider(context);
     context.subscriptions.push(vscode.window.registerWebviewViewProvider(workingSetView_1.CopilotWorkingSetViewProvider.viewType, workingSetProvider));
+    // Registrar el panel de chat básico
+    const chatViewProvider = new chatView_1.CopilotChatViewProvider(context);
+    context.subscriptions.push(vscode.window.registerWebviewViewProvider(chatView_1.CopilotChatViewProvider.viewType, chatViewProvider));
     // Escucha mensajes globales y reenvía a la webview
     vscode.window.onDidChangeActiveTextEditor(() => {
         // (Opcional: refrescar vista si cambia el editor)
