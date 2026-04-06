@@ -38,6 +38,8 @@ exports.deactivate = deactivate;
 const path = __importStar(require("path"));
 const vscode = __importStar(require("vscode"));
 const node_1 = require("vscode-languageclient/node");
+const workingSetView_1 = require("./workingSetView");
+const jupyterNotebookSerializer_1 = require("./jupyterNotebookSerializer");
 let legacy;
 let client;
 function startLsp(context) {
@@ -65,6 +67,42 @@ function startLsp(context) {
     context.subscriptions.push({ dispose: () => { void client?.stop(); } });
 }
 async function activate(context) {
+    // Integración nativa con API de Chat VS Code
+    if (vscode.chat && typeof vscode.chat.createChatParticipant === 'function') {
+        const handler = async (request, _ctx, stream, _token) => {
+            // Usar la lógica JS existente para obtener la respuesta
+            try {
+                // eslint-disable-next-line @typescript-eslint/no-var-requires
+                const legacy = require('../extension.js');
+                if (typeof legacy.requestChatCompletion === 'function') {
+                    const res = await legacy.requestChatCompletion(request.prompt, undefined, undefined);
+                    if (res && typeof res === 'string') {
+                        stream.markdown(res);
+                    }
+                    else if (res && res.completion) {
+                        stream.markdown(res.completion);
+                    }
+                    else {
+                        stream.markdown('No response.');
+                    }
+                }
+                else {
+                    stream.markdown('Chat handler not available.');
+                }
+            }
+            catch (err) {
+                stream.markdown('Error: ' + (err?.message || String(err)));
+            }
+        };
+        const chatParticipant = vscode.chat.createChatParticipant('copilot-local', handler);
+        chatParticipant.iconPath = vscode.Uri.joinPath(context.extensionUri, 'resources/copilot-local.svg');
+        chatParticipant.label = 'Copilot Local';
+        context.subscriptions.push(chatParticipant);
+    }
+    // Registrar notebookSerializer para Jupyter
+    if (vscode.notebook && vscode.notebook.registerNotebookSerializer) {
+        context.subscriptions.push(vscode.notebook.registerNotebookSerializer('jupyter-notebook', new jupyterNotebookSerializer_1.JupyterNotebookSerializer(), { transientOutputs: false, transientCellMetadata: {}, transientDocumentMetadata: {} }));
+    }
     const output = vscode.window.createOutputChannel('Copilot Local');
     context.subscriptions.push(output);
     try {
@@ -88,6 +126,15 @@ async function activate(context) {
         output.appendLine('[activate][lsp-error] ' + details);
         void vscode.window.showWarningMessage('Copilot Local: LSP no pudo iniciar (chat sigue disponible).');
     }
+    // Registrar la nueva vista Working Set
+    const workingSetProvider = new workingSetView_1.CopilotWorkingSetViewProvider(context);
+    context.subscriptions.push(vscode.window.registerWebviewViewProvider(workingSetView_1.CopilotWorkingSetViewProvider.viewType, workingSetProvider));
+    // Escucha mensajes globales y reenvía a la webview
+    vscode.window.onDidChangeActiveTextEditor(() => {
+        // (Opcional: refrescar vista si cambia el editor)
+    });
+    // Recibe mensajes desde extension.js
+    // Para recibir mensajes desde extension.js, usar un EventEmitter global o vscode.commands.registerCommand
 }
 async function deactivate() {
     if (client) {

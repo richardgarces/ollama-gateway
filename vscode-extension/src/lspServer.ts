@@ -10,6 +10,10 @@ import {
   CompletionItem,
   CompletionItemKind,
   TextDocumentSyncKind,
+  RenameParams,
+  WorkspaceEdit,
+  TextEdit,
+  Range,
 } from 'vscode-languageserver/node';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 
@@ -26,6 +30,7 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
   apiUrl = String(opts.apiUrl || apiUrl).replace(/\/+$/, '');
   model = String(opts.model || model).trim() || model;
 
+
   return {
     capabilities: {
       textDocumentSync: TextDocumentSyncKind.Incremental,
@@ -33,8 +38,50 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
         resolveProvider: false,
         triggerCharacters: ['.', '(', ',', ':', '{', '[', '<', ' ', '\n', '=', '/', '@', '#'],
       },
+      renameProvider: true,
     },
   };
+
+connection.onRenameRequest(async (params: RenameParams): Promise<WorkspaceEdit | null> => {
+  const doc = documents.get(params.textDocument.uri);
+  if (!doc) return null;
+  const text = doc.getText();
+  const pos = doc.offsetAt(params.position);
+  // Encuentra la palabra bajo el cursor
+  const wordRegex = /[\w$]+/g;
+  let match;
+  let start = 0, end = 0;
+  while ((match = wordRegex.exec(text))) {
+    if (pos >= match.index && pos <= match.index + match[0].length) {
+      start = match.index;
+      end = match.index + match[0].length;
+      break;
+    }
+  }
+  if (start === end) return null;
+  const oldName = text.slice(start, end);
+  const newName = params.newName;
+  // Busca todas las ocurrencias exactas de oldName en el texto
+  const edits: TextEdit[] = [];
+  wordRegex.lastIndex = 0;
+  while ((match = wordRegex.exec(text))) {
+    if (match[0] === oldName) {
+      edits.push({
+        range: {
+          start: doc.positionAt(match.index),
+          end: doc.positionAt(match.index + oldName.length),
+        },
+        newText: newName,
+      });
+    }
+  }
+  if (!edits.length) return null;
+  return {
+    changes: {
+      [params.textDocument.uri]: edits,
+    },
+  };
+});
 });
 
 async function postJSON(endpoint: string, payload: unknown): Promise<any> {

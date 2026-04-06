@@ -1,3 +1,50 @@
+  // Comando: refactorización multi-archivo
+  context.subscriptions.push(vscode.commands.registerCommand('copilot-local.multiFileRefactor', async (fileRanges) => {
+    // fileRanges: [{ uri, range }]
+    if (!Array.isArray(fileRanges) || fileRanges.length === 0) {
+      vscode.window.showWarningMessage('No files/ranges provided for multi-file refactor.');
+      return;
+    }
+    const edits = [];
+    for (const { uri, range } of fileRanges) {
+      const doc = await vscode.workspace.openTextDocument(uri);
+      const code = doc.getText(range);
+      const lang = doc.languageId || 'plaintext';
+      const prompt = 'Refactor the following ' + lang + ' code for clarity and maintainability. Return ONLY the refactored code.\n\n' +
+        'Code:\n```' + lang + '\n' + code + '\n```';
+      const res = await requestChatCompletion(prompt, undefined, undefined);
+      let refactored = String(res?.content || res?.completion || '').trim();
+      if (refactored.startsWith('```')) {
+        const lines = refactored.split('\n');
+        lines.shift();
+        if (lines.length > 0 && lines[lines.length - 1].trim() === '```') lines.pop();
+        refactored = lines.join('\n');
+      }
+      if (refactored && refactored !== code) {
+        edits.push({ uri, range, newText: refactored });
+      }
+    }
+    if (edits.length === 0) {
+      vscode.window.showInformationMessage('No refactorings suggested.');
+      return;
+    }
+    // Preview: mostrar diff para cada archivo
+    for (const edit of edits) {
+      const doc = await vscode.workspace.openTextDocument(edit.uri);
+      const originalDoc = await vscode.workspace.openTextDocument({ content: doc.getText(edit.range), language: doc.languageId });
+      const proposedDoc = await vscode.workspace.openTextDocument({ content: edit.newText, language: doc.languageId });
+      await vscode.commands.executeCommand('vscode.diff', originalDoc.uri, proposedDoc.uri, 'Multi-file Refactor Preview', { preview: true, viewColumn: vscode.ViewColumn.Beside });
+    }
+    const decision = await vscode.window.showInformationMessage('Apply all refactorings?', 'Apply', 'Discard');
+    if (decision === 'Apply') {
+      const wsEdit = new vscode.WorkspaceEdit();
+      for (const edit of edits) {
+        wsEdit.replace(edit.uri, edit.range, edit.newText);
+      }
+      const ok = await vscode.workspace.applyEdit(wsEdit);
+      if (ok) vscode.window.showInformationMessage('Multi-file refactorings applied.');
+    }
+  }));
 const vscode = require('vscode');
 const http = require('http');
 const https = require('https');
@@ -913,632 +960,6 @@ function getChatPanelHTML(fontSize, voiceInputEnabled) {
 <meta charset="UTF-8"/>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
-body { font-family: var(--vscode-font-family); font-size: ${fontSize}px; background: var(--vscode-editor-background); color: var(--vscode-editor-foreground); height: 100vh; display: flex; flex-direction: column; }
-#header { display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; border-bottom: 1px solid var(--vscode-panel-border); background: linear-gradient(90deg, var(--vscode-editor-background), var(--vscode-sideBar-background)); gap: 8px; }
-#leftTools { display: flex; align-items: center; gap: 8px; }
-#rightTools { display: flex; align-items: center; gap: 8px; }
-#profileBadge { font-size: 11px; color: var(--vscode-descriptionForeground); border: 1px solid var(--vscode-panel-border); border-radius: 999px; padding: 2px 8px; }
-#modelsHealth { font-size: 11px; color: var(--vscode-descriptionForeground); border: 1px solid var(--vscode-panel-border); border-radius: 999px; padding: 2px 8px; }
-#models { background: var(--vscode-dropdown-background); color: var(--vscode-dropdown-foreground); border: 1px solid var(--vscode-dropdown-border); padding: 4px; }
-#codeOnlyWrap { display: flex; align-items: center; gap: 6px; font-size: 12px; }
-#focusStats { font-size: 11px; color: var(--vscode-descriptionForeground); min-width: 70px; }
-#voiceControls { display: flex; align-items: center; gap: 6px; }
-#voiceStatus { font-size: 11px; padding: 2px 8px; border: 1px solid var(--vscode-panel-border); border-radius: 999px; }
-#voiceStatus[data-state="listening"] { color: var(--vscode-testing-iconPassed); border-color: var(--vscode-testing-iconPassed); }
-#voiceStatus[data-state="stopped"] { color: var(--vscode-descriptionForeground); }
-#voiceStatus[data-state="unavailable"] { color: var(--vscode-testing-iconFailed); border-color: var(--vscode-testing-iconFailed); }
-#compareView { display: none; border-bottom: 1px solid var(--vscode-panel-border); padding: 10px; gap: 10px; }
-#sessionBanner { display: none; margin: 8px 12px 0; padding: 8px 10px; border: 1px solid var(--vscode-textLink-foreground); border-radius: 6px; color: var(--vscode-textLink-foreground); background: color-mix(in srgb, var(--vscode-textLink-foreground) 10%, transparent); font-size: 12px; }
-#compareHeader { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
-#compareMeta { font-size: 12px; color: var(--vscode-descriptionForeground); }
-#compareGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.compareCol { border: 1px solid var(--vscode-panel-border); border-radius: 6px; padding: 8px; min-height: 120px; background: color-mix(in srgb, var(--vscode-editor-background) 92%, #000 8%); }
-.compareTitle { font-weight: 700; margin-bottom: 4px; }
-.compareStats { font-size: 11px; color: var(--vscode-descriptionForeground); margin-bottom: 6px; }
-.compareContent { white-space: pre-wrap; line-height: 1.4; }
-#messages { flex: 1; overflow-y: auto; padding: 12px; }
-.msg { margin-bottom: 12px; line-height: 1.5; word-wrap: break-word; }
-.msg.highlighted { outline: 2px solid var(--vscode-textLink-foreground); border-radius: 6px; animation: historyPulse 1.5s ease-in-out 1; }
-.msg .role { font-weight: 700; margin-right: 6px; }
-.msg .starBtn { padding: 2px 8px; font-size: 11px; margin-left: 6px; }
-.msg.user .role { color: var(--vscode-textLink-foreground); }
-.msg-content { white-space: pre-wrap; }
-.focus-meta { font-size: 11px; color: var(--vscode-descriptionForeground); margin-bottom: 6px; }
-.focus-empty { color: var(--vscode-descriptionForeground); font-style: italic; }
-pre { background: color-mix(in srgb, var(--vscode-editor-background) 85%, #000 15%); border: 1px solid var(--vscode-panel-border); border-radius: 8px; padding: 10px; overflow-x: auto; margin-top: 6px; position: relative; }
-pre code { font-family: var(--vscode-editor-font-family); font-size: 0.95em; }
-.code-actions { position: absolute; top: 6px; right: 6px; display: flex; gap: 4px; }
-.code-actions button { padding: 2px 8px; font-size: 11px; }
-#inputRow { display: flex; gap: 8px; border-top: 1px solid var(--vscode-panel-border); padding: 8px; }
-#prompt { flex: 1; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border); border-radius: 4px; padding: 8px; min-height: 36px; max-height: 140px; resize: vertical; }
-button { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border: 1px solid var(--vscode-button-border); border-radius: 4px; padding: 6px 12px; cursor: pointer; }
-button:hover { filter: brightness(1.06); }
-button:disabled { opacity: 0.5; cursor: default; }
-@keyframes historyPulse {
-  0% { background: color-mix(in srgb, var(--vscode-textLink-foreground) 24%, transparent); }
-  100% { background: transparent; }
-}
-</style>
-</head>
-<body>
-<div id="header"><div id="leftTools"><strong>Copilot Local Chat</strong><span id="profileBadge">profile: -</span><span id="modelsHealth" title="Estado de modelos locales">models: --</span><select id="models"></select></div><div id="rightTools"><label id="codeOnlyWrap"><input id="codeOnlyToggle" type="checkbox"/> Code only</label><span id="focusStats">0 blocks</span><div id="voiceControls"><button id="micBtn" title="Dictado por voz">Mic</button><span id="voiceStatus" data-state="stopped">detenido</span></div><button id="compareBtn">Compare</button><button id="regressionBtn" disabled>Regression Test</button><button id="stopBtn" disabled>Stop</button><button id="clearHistoryBtn">Clear History</button><button id="exportBtn">Export</button></div></div>
-<div id="sessionBanner"></div>
-<div id="compareView"><div id="compareHeader"><strong>Compare Models</strong><div><span id="compareMeta"></span> <button id="closeCompareBtn">Close</button></div></div><div id="compareGrid"><div class="compareCol"><div class="compareTitle" id="compareLeftTitle">-</div><div class="compareStats" id="compareLeftStats"></div><div class="compareContent" id="compareLeftContent"></div></div><div class="compareCol"><div class="compareTitle" id="compareRightTitle">-</div><div class="compareStats" id="compareRightStats"></div><div class="compareContent" id="compareRightContent"></div></div></div></div>
-<div id="messages"></div>
-<div id="inputRow"><textarea id="prompt" rows="1" placeholder="Ask something..."></textarea><button id="send">Send</button></div>
-<script>
-const vscode = acquireVsCodeApi();
-const messagesEl = document.getElementById('messages');
-const promptEl = document.getElementById('prompt');
-const sendBtn = document.getElementById('send');
-const exportBtn = document.getElementById('exportBtn');
-const compareBtn = document.getElementById('compareBtn');
-const regressionBtn = document.getElementById('regressionBtn');
-const stopBtn = document.getElementById('stopBtn');
-const closeCompareBtn = document.getElementById('closeCompareBtn');
-const clearHistoryBtn = document.getElementById('clearHistoryBtn');
-const codeOnlyToggleEl = document.getElementById('codeOnlyToggle');
-const focusStatsEl = document.getElementById('focusStats');
-const modelsEl = document.getElementById('models');
-const micBtn = document.getElementById('micBtn');
-const voiceStatusEl = document.getElementById('voiceStatus');
-const compareViewEl = document.getElementById('compareView');
-const compareMetaEl = document.getElementById('compareMeta');
-const compareLeftTitleEl = document.getElementById('compareLeftTitle');
-const compareLeftStatsEl = document.getElementById('compareLeftStats');
-const compareLeftContentEl = document.getElementById('compareLeftContent');
-const compareRightTitleEl = document.getElementById('compareRightTitle');
-const compareRightStatsEl = document.getElementById('compareRightStats');
-const compareRightContentEl = document.getElementById('compareRightContent');
-const profileBadgeEl = document.getElementById('profileBadge');
-const modelsHealthEl = document.getElementById('modelsHealth');
-const sessionBannerEl = document.getElementById('sessionBanner');
-const voiceEnabled = ${voiceInputEnabled ? 'true' : 'false'};
-let pending = null;
-const chatHistory = [];
-let recognition = null;
-let listening = false;
-let historySyncTimer = null;
-let codeOnlyMode = false;
-let sessionBannerTimer = null;
-let regressionPromptDraft = '';
-
-function sanitizeHTML(text) {
-  return String(text || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\"/g, '&quot;').replace(/'/g, '&#39;');
-}
-
-function renderMarkdownWithCode(text) {
-  const src = String(text || '');
-  const fence = String.fromCharCode(96) + String.fromCharCode(96) + String.fromCharCode(96);
-  const re = new RegExp(fence + '([a-zA-Z0-9_-]*)\\\\n([\\\\s\\\\S]*?)' + fence, 'g');
-  let i = 0;
-  let out = '';
-  let m;
-  while ((m = re.exec(src)) !== null) {
-    out += '<span>' + sanitizeHTML(src.slice(i, m.index)).replace(/\\n/g, '<br>') + '</span>';
-    const lang = sanitizeHTML(m[1] || 'plaintext');
-    const code = sanitizeHTML(m[2] || '');
-    out += '<pre><div class="code-actions"><button data-copy="1">Copy</button><button data-apply="1" data-lang="' + lang + '">Apply</button><button data-insert-file="1" data-lang="' + lang + '">Insert to file</button></div><code class="language-' + lang + '">' + code + '</code></pre>';
-    i = m.index + m[0].length;
-  }
-  out += '<span>' + sanitizeHTML(src.slice(i)).replace(/\\n/g, '<br>') + '</span>';
-  return out;
-}
-
-function extractCodeBlocks(text) {
-  const src = String(text || '');
-  const fence = String.fromCharCode(96) + String.fromCharCode(96) + String.fromCharCode(96);
-  const re = new RegExp(fence + '([a-zA-Z0-9_-]*)\\\\n([\\\\s\\\\S]*?)' + fence, 'g');
-  const blocks = [];
-  let m;
-  while ((m = re.exec(src)) !== null) {
-    blocks.push({
-      lang: String(m[1] || 'plaintext').trim() || 'plaintext',
-      code: String(m[2] || ''),
-    });
-  }
-  return blocks;
-}
-
-function renderCodeOnly(text) {
-  const blocks = extractCodeBlocks(text);
-  if (blocks.length === 0) {
-    return '<span class="focus-empty">No fenced code blocks</span>';
-  }
-
-  const langs = [...new Set(blocks.map((b) => b.lang.toLowerCase()))];
-  let out = '<div class="focus-meta">' + String(blocks.length) + ' block(s) | ' + sanitizeHTML(langs.join(', ')) + '</div>';
-  blocks.forEach((b) => {
-    const lang = sanitizeHTML(b.lang || 'plaintext');
-    const code = sanitizeHTML(b.code || '');
-    out += '<pre><div class="code-actions"><button data-copy="1">Copy</button><button data-apply="1" data-lang="' + lang + '">Apply</button><button data-insert-file="1" data-lang="' + lang + '">Insert to file</button></div><code class="language-' + lang + '">' + code + '</code></pre>';
-  });
-  return out;
-}
-
-function renderMessageContent(text) {
-  return codeOnlyMode ? renderCodeOnly(text) : renderMarkdownWithCode(text);
-}
-
-function attachCodeActions(root) {
-  root.querySelectorAll('button[data-copy]').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      const code = btn.closest('pre')?.querySelector('code')?.innerText || '';
-      await navigator.clipboard.writeText(code);
-    });
-  });
-  root.querySelectorAll('button[data-apply]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const code = btn.closest('pre')?.querySelector('code')?.innerText || '';
-      const lang = btn.getAttribute('data-lang') || '';
-      vscode.postMessage({ type: 'apply', code, lang });
-    });
-  });
-  root.querySelectorAll('button[data-insert-file]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const code = btn.closest('pre')?.querySelector('code')?.innerText || '';
-      const lang = btn.getAttribute('data-lang') || '';
-      vscode.postMessage({ type: 'insertToFile', code, lang });
-    });
-  });
-}
-
-function generateMessageId() {
-  return Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
-}
-
-function scheduleHistorySync() {
-  if (historySyncTimer) clearTimeout(historySyncTimer);
-  historySyncTimer = setTimeout(() => {
-    vscode.postMessage({ type: 'historyUpdate', messages: chatHistory });
-  }, 80);
-}
-
-function updateFocusStats() {
-  let blocks = 0;
-  const langs = new Set();
-  chatHistory.forEach((m) => {
-    const found = extractCodeBlocks(m.content || '');
-    blocks += found.length;
-    found.forEach((b) => langs.add(String(b.lang || 'plaintext').toLowerCase()));
-  });
-  const langText = langs.size > 0 ? Array.from(langs).join(', ') : '-';
-  focusStatsEl.textContent = String(blocks) + ' blocks | ' + langText;
-}
-
-function updateProfileBadge(profile) {
-  if (!profileBadgeEl) return;
-  const id = String(profile?.id || '-');
-  const model = String(profile?.model || '-');
-  const lang = String(profile?.lang || '-');
-  const temperature = Number(profile?.temperature || 0).toFixed(2);
-  profileBadgeEl.textContent = 'profile: ' + id;
-  profileBadgeEl.title = 'model=' + model + ' | lang=' + lang + ' | temperature=' + temperature;
-}
-
-function updateModelsHealth(status) {
-  if (!modelsHealthEl) return;
-  const ok = !!status?.ok;
-  const count = Number(status?.count || 0);
-  const source = String(status?.source || 'unknown');
-  if (ok) {
-    modelsHealthEl.textContent = 'models: ' + String(count);
-    modelsHealthEl.title = 'Modelos locales listos (' + String(count) + ', source=' + source + ')';
-    return;
-  }
-  modelsHealthEl.textContent = 'models: unavailable';
-  modelsHealthEl.title = String(status?.error || 'No se pudieron validar modelos locales');
-}
-
-function showSessionBanner(text) {
-  if (!sessionBannerEl) return;
-  if (sessionBannerTimer) clearTimeout(sessionBannerTimer);
-  sessionBannerEl.textContent = String(text || 'session restored');
-  sessionBannerEl.style.display = 'block';
-  sessionBannerTimer = setTimeout(() => {
-    sessionBannerEl.style.display = 'none';
-  }, 3200);
-}
-
-function rerenderChatKeepingScroll() {
-  const prevScrollHeight = messagesEl.scrollHeight;
-  const ratio = prevScrollHeight > 0 ? (messagesEl.scrollTop / prevScrollHeight) : 0;
-  const pendingId = pending?.dataset.msgId || '';
-
-  messagesEl.innerHTML = '';
-  for (const item of chatHistory) {
-    const d = document.createElement('div');
-    d.className = 'msg ' + item.role;
-    d.dataset.msgId = item.id;
-
-    const roleEl = document.createElement('span');
-    roleEl.className = 'role';
-    roleEl.textContent = item.role === 'user' ? 'You:' : 'AI:';
-    if (item.role === 'assistant') {
-      const starBtn = document.createElement('button');
-      starBtn.className = 'starBtn';
-      starBtn.textContent = 'Star';
-      starBtn.title = 'Guardar en favoritos';
-      starBtn.addEventListener('click', () => {
-        const current = chatHistory.find((h) => h.id === item.id);
-        const content = current?.content || d.querySelector('.msg-content')?.innerText || '';
-        if (!content.trim()) return;
-        vscode.postMessage({ type: 'favoriteAdd', content });
-        starBtn.textContent = 'Starred';
-        starBtn.disabled = true;
-      });
-      d.appendChild(starBtn);
-    }
-
-    const contentEl = document.createElement('div');
-    contentEl.className = 'msg-content';
-    contentEl.innerHTML = renderMessageContent(item.content || '');
-
-    d.appendChild(roleEl);
-    d.appendChild(contentEl);
-    messagesEl.appendChild(d);
-    d.querySelectorAll('pre code').forEach((el) => {
-      try {
-        if (window.hljs && typeof window.hljs.highlightElement === 'function') {
-          window.hljs.highlightElement(el);
-        }
-      } catch {}
-    });
-    attachCodeActions(d);
-  }
-
-  pending = pendingId ? Array.from(messagesEl.querySelectorAll('.msg')).find((n) => n.dataset.msgId === pendingId) || null : null;
-  messagesEl.scrollTop = Math.max(0, Math.round(messagesEl.scrollHeight * ratio));
-}
-
-function addMessage(role, text, options = {}) {
-  const d = document.createElement('div');
-  d.className = 'msg ' + role;
-  const msgId = options.id || generateMessageId();
-  d.dataset.msgId = msgId;
-  const roleEl = document.createElement('span');
-  roleEl.className = 'role';
-  roleEl.textContent = role === 'user' ? 'You:' : 'AI:';
-  if (role === 'assistant') {
-    const starBtn = document.createElement('button');
-    starBtn.className = 'starBtn';
-    starBtn.textContent = 'Star';
-    starBtn.title = 'Guardar en favoritos';
-    starBtn.addEventListener('click', () => {
-      const item = chatHistory.find((h) => h.id === msgId);
-      const content = item?.content || d.querySelector('.msg-content')?.innerText || '';
-      if (!content.trim()) return;
-      vscode.postMessage({ type: 'favoriteAdd', content });
-      starBtn.textContent = 'Starred';
-      starBtn.disabled = true;
-    });
-    d.appendChild(starBtn);
-  }
-  const contentEl = document.createElement('div');
-  contentEl.className = 'msg-content';
-  contentEl.innerHTML = renderMessageContent(text);
-  d.appendChild(roleEl);
-  d.appendChild(contentEl);
-  messagesEl.appendChild(d);
-  d.querySelectorAll('pre code').forEach((el) => {
-    try {
-      if (window.hljs && typeof window.hljs.highlightElement === 'function') {
-        window.hljs.highlightElement(el);
-      }
-    } catch {}
-  });
-  attachCodeActions(d);
-  chatHistory.push({ id: msgId, role, content: text, timestamp: options.timestamp || Date.now() });
-  if (!options.skipSync) scheduleHistorySync();
-  updateFocusStats();
-  messagesEl.scrollTop = messagesEl.scrollHeight;
-  return d;
-}
-
-function startAssistant() { pending = addMessage('assistant', ''); return pending; }
-
-function updatePending(text) {
-  if (!pending) return;
-  const pendingId = pending.dataset.msgId || '';
-  const pendingItem = pendingId ? chatHistory.find((h) => h.id === pendingId) : null;
-  const prev = pendingItem?.content || pending.querySelector('.msg-content')?.innerText || '';
-  const next = prev + text;
-  pending.querySelector('.msg-content').innerHTML = renderMessageContent(next);
-  if (pendingId) {
-    const item = chatHistory.find((h) => h.id === pendingId);
-    if (item) {
-      item.content = next;
-      scheduleHistorySync();
-    }
-  }
-  pending.querySelectorAll('pre code').forEach((el) => {
-    try {
-      if (window.hljs && typeof window.hljs.highlightElement === 'function') {
-        window.hljs.highlightElement(el);
-      }
-    } catch {}
-  });
-  attachCodeActions(pending);
-  updateFocusStats();
-  messagesEl.scrollTop = messagesEl.scrollHeight;
-}
-
-function resetHistoryUI() {
-  messagesEl.innerHTML = '';
-  chatHistory.length = 0;
-  pending = null;
-  updateFocusStats();
-}
-
-function hydrateHistory(messages) {
-  resetHistoryUI();
-  const list = Array.isArray(messages) ? messages : [];
-  list.forEach((m) => {
-    addMessage(m.role === 'assistant' ? 'assistant' : 'user', String(m.content || ''), {
-      id: String(m.id || ''),
-      timestamp: Number(m.timestamp || Date.now()),
-      skipSync: true,
-    });
-  });
-}
-
-function highlightMessageById(messageId) {
-  const id = String(messageId || '').trim();
-  if (!id) return;
-  const el = Array.from(messagesEl.querySelectorAll('.msg')).find((n) => n.dataset.msgId === id);
-  if (!el) return;
-  messagesEl.querySelectorAll('.msg.highlighted').forEach((n) => n.classList.remove('highlighted'));
-  el.classList.add('highlighted');
-  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  setTimeout(() => el.classList.remove('highlighted'), 1800);
-}
-
-function sendNow(text) {
-  if (!text.trim()) return;
-  addMessage('user', text);
-  sendBtn.disabled = true;
-  if (stopBtn) stopBtn.disabled = false;
-  if (text.trim().toLowerCase().startsWith('/agent')) {
-    const task = text.replace(/^\\/agent\\s*/i, '').trim();
-    if (!task) { addMessage('assistant', 'Uso: /agent <descripción de la tarea>'); sendBtn.disabled = false; return; }
-    addMessage('assistant', '🤖 Agent Autopilot ejecutando...');
-    vscode.postMessage({ type: 'agentChat', task, model: modelsEl.value || '', contextFiles: [] });
-  } else {
-    startAssistant();
-    vscode.postMessage({ type: 'chat', text, model: modelsEl.value || '' });
-  }
-}
-
-function setRegressionDraft(text) {
-  regressionPromptDraft = String(text || '').trim();
-  if (!regressionBtn) return;
-  regressionBtn.disabled = !regressionPromptDraft;
-  regressionBtn.title = regressionPromptDraft ? 'Generar test de regresion sugerido' : 'Disponible tras Explain Test Failure';
-}
-
-function openCompareView() {
-  compareViewEl.style.display = 'block';
-}
-
-function closeCompareView() {
-  compareViewEl.style.display = 'none';
-}
-
-function setComparePending() {
-  openCompareView();
-  compareMetaEl.textContent = 'comparando...';
-  compareLeftTitleEl.textContent = '-';
-  compareRightTitleEl.textContent = '-';
-  compareLeftStatsEl.textContent = '';
-  compareRightStatsEl.textContent = '';
-  compareLeftContentEl.textContent = '';
-  compareRightContentEl.textContent = '';
-}
-
-function renderCompareResult(payload) {
-  if (!payload) return;
-  openCompareView();
-  compareMetaEl.textContent = payload.prompt ? ('Prompt length: ' + String(payload.prompt.length)) : '';
-
-  const left = payload.left || {};
-  const right = payload.right || {};
-  compareLeftTitleEl.textContent = left.model || '-';
-  compareLeftStatsEl.textContent = 'time: ' + String(left.elapsedMs || 0) + ' ms | chars: ' + String(left.length || 0);
-  compareLeftContentEl.textContent = left.content || '';
-
-  compareRightTitleEl.textContent = right.model || '-';
-  compareRightStatsEl.textContent = 'time: ' + String(right.elapsedMs || 0) + ' ms | chars: ' + String(right.length || 0);
-  compareRightContentEl.textContent = right.content || '';
-}
-
-function setVoiceStatus(state, label) {
-  if (!voiceStatusEl) return;
-  voiceStatusEl.dataset.state = state;
-  voiceStatusEl.textContent = label;
-}
-
-function appendTranscript(text) {
-  const t = String(text || '').trim();
-  if (!t) return;
-  const sep = promptEl.value && !/\s$/.test(promptEl.value) ? ' ' : '';
-  promptEl.value += sep + t;
-  promptEl.focus();
-}
-
-function speechCtor() {
-  return window.SpeechRecognition || window.webkitSpeechRecognition;
-}
-
-function initVoiceInput() {
-  if (!voiceEnabled) {
-    if (micBtn) micBtn.style.display = 'none';
-    if (voiceStatusEl) voiceStatusEl.style.display = 'none';
-    return;
-  }
-
-  const Ctor = speechCtor();
-  if (typeof Ctor !== 'function') {
-    if (micBtn) micBtn.disabled = true;
-    setVoiceStatus('unavailable', 'no disponible');
-    return;
-  }
-
-  recognition = new Ctor();
-  recognition.continuous = true;
-  recognition.interimResults = true;
-  recognition.lang = navigator.language || 'es-ES';
-
-  recognition.onstart = () => {
-    listening = true;
-    setVoiceStatus('listening', 'escuchando');
-  };
-
-  recognition.onend = () => {
-    listening = false;
-    setVoiceStatus('stopped', 'detenido');
-  };
-
-  recognition.onerror = () => {
-    listening = false;
-    setVoiceStatus('unavailable', 'error');
-  };
-
-  recognition.onresult = (event) => {
-    let finalText = '';
-    for (let i = event.resultIndex; i < event.results.length; i++) {
-      const result = event.results[i];
-      if (result.isFinal && result[0] && result[0].transcript) {
-        finalText += result[0].transcript + ' ';
-      }
-    }
-    appendTranscript(finalText);
-  };
-
-  if (micBtn) {
-    micBtn.addEventListener('click', () => {
-      try {
-        if (!listening) recognition.start();
-        else recognition.stop();
-      } catch {
-        setVoiceStatus('unavailable', 'error');
-      }
-    });
-  }
-}
-
-function send() {
-  const text = promptEl.value.trim();
-  if (!text) return;
-  promptEl.value = '';
-  sendNow(text);
-}
-
-sendBtn.addEventListener('click', send);
-promptEl.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault();
-    send();
-  }
-});
-
-exportBtn.addEventListener('click', () => {
-  vscode.postMessage({ type: 'export', messages: chatHistory });
-});
-
-compareBtn.addEventListener('click', () => {
-  const prompt = promptEl.value.trim();
-  if (!prompt) return;
-  setComparePending();
-  vscode.postMessage({ type: 'compare', text: prompt });
-});
-
-regressionBtn.addEventListener('click', () => {
-  if (!regressionPromptDraft) return;
-  sendNow(regressionPromptDraft);
-});
-
-stopBtn.addEventListener('click', () => {
-  vscode.postMessage({ type: 'cancelChat' });
-  if (stopBtn) stopBtn.disabled = true;
-});
-
-modelsEl.addEventListener('change', () => {
-  vscode.postMessage({ type: 'modelSelected', model: modelsEl.value || '' });
-});
-
-closeCompareBtn.addEventListener('click', () => {
-  closeCompareView();
-});
-
-clearHistoryBtn.addEventListener('click', () => {
-  vscode.postMessage({ type: 'clearHistoryRequest' });
-});
-
-codeOnlyToggleEl.addEventListener('change', () => {
-  codeOnlyMode = !!codeOnlyToggleEl.checked;
-  rerenderChatKeepingScroll();
-});
-
-initVoiceInput();
-updateFocusStats();
-
-window.addEventListener('message', (e) => {
-  const msg = e.data;
-  if (msg.type === 'chunk') { updatePending(msg.text || ''); return; }
-  if (msg.type === 'done') { pending = null; sendBtn.disabled = false; if (stopBtn) stopBtn.disabled = true; return; }
-  if (msg.type === 'error') { updatePending('\\n[Error: ' + (msg.text || 'unknown') + ']'); pending = null; sendBtn.disabled = false; if (stopBtn) stopBtn.disabled = true; return; }
-  if (msg.type === 'agentThinking') { addMessage('assistant', '💭 ' + (msg.content || '')); return; }
-  if (msg.type === 'agentToolCall') { addMessage('assistant', '🔧 ' + (msg.tool || '') + '(' + JSON.stringify(msg.args || {}) + ')'); return; }
-  if (msg.type === 'agentToolResult') { addMessage('assistant', (msg.success ? '✅' : '❌') + ' ' + (msg.output || '').substring(0, 500)); return; }
-  if (msg.type === 'agentAnswer') { addMessage('assistant', msg.content || ''); return; }
-  if (msg.type === 'agentDone') { sendBtn.disabled = false; if (stopBtn) stopBtn.disabled = true; return; }
-  if (msg.type === 'agentError') { addMessage('assistant', '[Error: ' + (msg.text || 'unknown') + ']'); sendBtn.disabled = false; if (stopBtn) stopBtn.disabled = true; return; }
-  if (msg.type === 'prefill') { promptEl.value = msg.text || ''; promptEl.focus(); return; }
-  if (msg.type === 'runPrompt') { sendNow(msg.text || ''); return; }
-  if (msg.type === 'externalResult') { addMessage('assistant', msg.text || ''); return; }
-  if (msg.type === 'hydrateHistory') { hydrateHistory(msg.messages || []); return; }
-  if (msg.type === 'highlightHistory') { highlightMessageById(msg.id || ''); return; }
-  if (msg.type === 'historyCleared') { resetHistoryUI(); return; }
-  if (msg.type === 'compareStart') { setComparePending(); return; }
-  if (msg.type === 'compareResult') { renderCompareResult(msg); return; }
-  if (msg.type === 'openCompareMode') { openCompareView(); return; }
-  if (msg.type === 'models') {
-    const models = Array.isArray(msg.models) ? msg.models : [];
-    const current = msg.current || '';
-    modelsEl.innerHTML = '';
-    const arr = models.length > 0 ? models : [current || 'local-rag'];
-    arr.forEach((m) => { const opt = document.createElement('option'); opt.value = m; opt.textContent = m; modelsEl.appendChild(opt); });
-    modelsEl.value = arr.includes(current) ? current : arr[0];
-    return;
-  }
-  if (msg.type === 'profileUpdate') {
-    updateProfileBadge(msg.profile || {});
-    return;
-  }
-  if (msg.type === 'modelsValidation') {
-    updateModelsHealth(msg);
-    return;
-  }
-  if (msg.type === 'sessionRestored') {
-    showSessionBanner(msg.text || 'session restored');
-    return;
-  }
-  if (msg.type === 'regressionDraft') {
-    setRegressionDraft(msg.text || '');
-  }
-});
-</script>
-</body>
-</html>`;
-}
-
-function getChatSidebarHTML(fontSize, voiceInputEnabled) {
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8"/>
-<style>
-* { box-sizing: border-box; margin: 0; padding: 0; }
 :root {
   --chat-font: ${fontSize || 13}px;
   --accent: var(--vscode-textLink-foreground);
@@ -1645,63 +1066,40 @@ pre:hover .code-actions { opacity: 1; }
 #micBtn { background: none; border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; cursor: pointer; color: var(--muted); font-size: 13px; }
 #micBtn:hover { border-color: var(--accent); color: var(--accent); }
 #voiceStatus { font-size: 10px; color: var(--muted); }
-#voiceStatus[data-state="listening"] { color: var(--vscode-testing-iconPassed); }
-
-button.secondary { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); border: 1px solid var(--border); }
-
-/* ── Agent Autopilot Steps ── */
-.agent-steps { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
-.agent-step { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; font-size: 12px; }
-.agent-step-header { display: flex; align-items: center; gap: 6px; padding: 6px 10px; background: var(--code-bg); cursor: pointer; user-select: none; }
-.agent-step-header:hover { background: var(--hover-bg); }
-.agent-step-icon { font-size: 13px; flex-shrink: 0; }
-.agent-step-label { flex: 1; font-weight: 600; }
-.agent-step-badge { font-size: 10px; padding: 1px 6px; border-radius: 8px; }
-.agent-step-badge.success { background: color-mix(in srgb, var(--vscode-testing-iconPassed) 18%, transparent); color: var(--vscode-testing-iconPassed); }
-.agent-step-badge.error { background: color-mix(in srgb, var(--vscode-errorForeground) 18%, transparent); color: var(--vscode-errorForeground); }
-.agent-step-badge.running { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
-.agent-step-body { display: none; padding: 6px 10px; border-top: 1px solid var(--border); }
-.agent-step-body.open { display: block; }
-.agent-step-body pre { margin: 4px 0; font-size: 11px; max-height: 200px; overflow-y: auto; }
-.agent-thinking { color: var(--muted); font-style: italic; padding: 4px 0; }
-.agent-answer { padding: 6px 0; }
-.agent-progress { display: flex; align-items: center; gap: 6px; padding: 4px 0; font-size: 11px; color: var(--muted); }
-.agent-spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: agentSpin 0.8s linear infinite; }
-@keyframes agentSpin { to { transform: rotate(360deg); } }
-
-.agent-file-op { background: color-mix(in srgb, var(--accent) 8%, transparent); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; margin: 6px 0; }
-.agent-file-op-header { display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 600; }
-.agent-file-op-header .icon { font-size: 14px; }
-.agent-file-op-path { font-family: var(--vscode-editor-font-family, monospace); font-size: 11px; color: var(--accent); word-break: break-all; }
-.agent-file-op-actions { display: flex; gap: 6px; margin-top: 6px; }
-.agent-file-op-actions button { font-size: 11px; padding: 3px 10px; border-radius: 4px; border: 1px solid var(--border); cursor: pointer; background: var(--vscode-button-secondaryBackground, transparent); color: var(--fg); }
-.agent-file-op-actions .accept-btn { background: color-mix(in srgb, var(--vscode-testing-iconPassed) 18%, transparent); color: var(--vscode-testing-iconPassed); border-color: var(--vscode-testing-iconPassed); }
-.agent-file-op-actions .reject-btn { background: color-mix(in srgb, var(--vscode-errorForeground) 18%, transparent); color: var(--vscode-errorForeground); border-color: var(--vscode-errorForeground); }
-.agent-file-op-status { font-size: 10px; margin-top: 4px; font-style: italic; color: var(--muted); }
-.agent-file-op-status.accepted { color: var(--vscode-testing-iconPassed); }
-.agent-file-op-status.rejected { color: var(--vscode-errorForeground); }
-#addFileBtn { background: none; border: 1px solid var(--border); color: var(--muted); border-radius: 4px; padding: 2px 8px; cursor: pointer; font-size: 11px; white-space: nowrap; }
-#addFileBtn:hover { color: var(--fg); border-color: var(--accent); }
-
-/* ── Mode Selector ── */
-#modeSelector { display: flex; gap: 0; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; margin: 0 10px 6px; font-size: 11px; }
-#modeSelector button { flex: 1; padding: 4px 10px; border: none; cursor: pointer; background: transparent; color: var(--muted); font-size: 11px; font-weight: 500; transition: all 0.15s; white-space: nowrap; }
-#modeSelector button:hover { color: var(--fg); background: color-mix(in srgb, var(--accent) 8%, transparent); }
-#modeSelector button.active { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); font-weight: 600; }
-.agent-cmd-op { background: color-mix(in srgb, var(--vscode-terminal-ansiYellow, #e2c04b) 10%, transparent); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; margin: 6px 0; }
-.agent-cmd-op code { font-family: var(--vscode-editor-font-family, monospace); font-size: 11px; background: var(--code-bg); padding: 2px 6px; border-radius: 3px; }
-.agent-cmd-output { font-family: var(--vscode-editor-font-family, monospace); font-size: 10px; max-height: 150px; overflow-y: auto; margin-top: 4px; padding: 4px; background: var(--code-bg); border-radius: 3px; white-space: pre-wrap; word-break: break-all; }
-.agent-cmd-code { margin: 6px 0 4px; background: var(--code-bg); border-radius: 4px; }
-.agent-cmd-code code { display: block; padding: 6px 8px; white-space: pre-wrap; word-break: break-all; font-size: 11px; }
-button[data-insert-file] { background: color-mix(in srgb, var(--vscode-terminal-ansiGreen, #89d185) 20%, transparent); color: var(--fg); border: 1px solid color-mix(in srgb, var(--vscode-terminal-ansiGreen) 40%, transparent); }
-button[data-insert-file]:hover { background: color-mix(in srgb, var(--vscode-terminal-ansiGreen, #89d185) 35%, transparent); }
-
+#voiceStatus[data-state="listening"] { color: var(--vscode-testing-iconPassed); border-color: var(--vscode-testing-iconPassed); }
+#voiceStatus[data-state="stopped"] { color: var(--vscode-descriptionForeground); }
+#voiceStatus[data-state="unavailable"] { color: var(--vscode-testing-iconFailed); border-color: var(--vscode-testing-iconFailed); }
+#compareView { display: none; border-bottom: 1px solid var(--border); padding: 10px; gap: 10px; }
+#sessionBanner { display: none; margin: 8px 12px 0; padding: 8px 10px; border: 1px solid var(--vscode-textLink-foreground); border-radius: 6px; color: var(--vscode-textLink-foreground); background: color-mix(in srgb, var(--vscode-textLink-foreground) 10%, transparent); font-size: 12px; }
+#compareHeader { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+#compareMeta { font-size: 12px; color: var(--vscode-descriptionForeground); }
+#compareGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.compareCol { border: 1px solid var(--border); border-radius: 6px; padding: 8px; min-height: 120px; background: color-mix(in srgb, var(--vscode-editor-background) 92%, #000 8%); }
+.compareTitle { font-weight: 700; margin-bottom: 4px; }
+.compareStats { font-size: 11px; color: var(--vscode-descriptionForeground); margin-bottom: 6px; }
+.compareContent { white-space: pre-wrap; line-height: 1.4; }
+#messages { flex: 1; overflow-y: auto; padding: 12px; }
+.msg { margin-bottom: 12px; line-height: 1.5; word-wrap: break-word; }
+.msg.highlighted { outline: 2px solid var(--accent); border-radius: 6px; animation: historyPulse 1.5s ease-in-out 1; }
+.msg .role { font-weight: 700; margin-right: 6px; }
+.msg .starBtn { padding: 2px 8px; font-size: 11px; margin-left: 6px; }
+.msg.user .role { color: var(--vscode-textLink-foreground); }
+.msg-content { white-space: pre-wrap; }
+.focus-meta { font-size: 11px; color: var(--muted); margin-bottom: 6px; }
+.focus-empty { color: var(--muted); font-style: italic; }
+pre { background: color-mix(in srgb, var(--vscode-editor-background) 85%, #000 15%); border: 1px solid var(--vscode-panel-border); border-radius: 8px; padding: 10px; overflow-x: auto; margin-top: 6px; position: relative; }
+pre code { font-family: var(--vscode-editor-font-family); font-size: 0.95em; }
+.code-actions { position: absolute; top: 6px; right: 6px; display: flex; gap: 4px; }
+.code-actions button { padding: 2px 8px; font-size: 11px; }
+#inputRow { display: flex; gap: 8px; border-top: 1px solid var(--vscode-panel-border); padding: 8px; }
+#prompt { flex: 1; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border); border-radius: 4px; padding: 8px; min-height: 36px; max-height: 140px; resize: vertical; }
+button { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border: 1px solid var(--vscode-button-border); border-radius: 4px; padding: 6px 12px; cursor: pointer; }
+button:hover { filter: brightness(1.06); }
+button:disabled { opacity: 0.5; cursor: default; }
 @keyframes historyPulse {
   0% { background: color-mix(in srgb, var(--accent) 24%, transparent); }
   100% { background: transparent; }
 }
-@keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
-.msg { animation: fadeIn 0.2s ease-out; }
 </style>
 </head>
 <body>
@@ -1858,9 +1256,12 @@ function extractCodeBlocks(text) {
 
 function renderCodeOnly(text) {
   const blocks = extractCodeBlocks(text);
-  if (blocks.length === 0) return '<span class="focus-empty">No fenced code blocks</span>';
+  if (blocks.length === 0) {
+    return '<span class="focus-empty">No fenced code blocks</span>';
+  }
+
   const langs = [...new Set(blocks.map((b) => b.lang.toLowerCase()))];
-  let out = '<div class="focus-meta">' + blocks.length + ' block(s) | ' + sanitizeHTML(langs.join(', ')) + '</div>';
+  let out = '<div class="focus-meta">' + String(blocks.length) + ' block(s) | ' + sanitizeHTML(langs.join(', ')) + '</div>';
   blocks.forEach((b) => {
     const lang = sanitizeHTML(b.lang || 'plaintext');
     const code = sanitizeHTML(b.code || '');
@@ -2028,12 +1429,17 @@ function startAssistant() { pending = addMessage('assistant', ''); return pendin
 function updatePending(text) {
   if (!pending) return;
   const pendingId = pending.dataset.msgId || '';
-  const item = pendingId ? chatHistory.find((h) => h.id === pendingId) : null;
-  const prev = item?.content || '';
+  const pendingItem = pendingId ? chatHistory.find((h) => h.id === pendingId) : null;
+  const prev = pendingItem?.content || pending.querySelector('.msg-content')?.innerText || '';
   const next = prev + text;
-  const contentEl = pending.querySelector('.msg-content');
-  if (contentEl) contentEl.innerHTML = renderMessageContent(next);
-  if (item) { item.content = next; scheduleHistorySync(); }
+  pending.querySelector('.msg-content').innerHTML = renderMessageContent(next);
+  if (pendingId) {
+    const item = chatHistory.find((h) => h.id === pendingId);
+    if (item) {
+      item.content = next;
+      scheduleHistorySync();
+    }
+  }
   pending.querySelectorAll('pre code').forEach((el) => {
     try { if (window.hljs) window.hljs.highlightElement(el); } catch {}
   });
@@ -2195,7 +1601,7 @@ function updateFileOpStatus(opId, status, text) {
     badge.className = 'agent-step-badge ' + (status === 'accepted' ? 'success' : 'error');
   }
   if (statusEl) { statusEl.textContent = text; statusEl.className = 'agent-file-op-status ' + status; }
-  if (actionsEl) actionsEl.remove();
+  if (actionsEl && status !== 'running') actionsEl.remove();
 }
 
 let cmdOpCounter = 0;
@@ -2309,7 +1715,7 @@ function setComparePending() { openCompareView(); compareMetaEl.textContent = 'c
 function renderCompareResult(payload) {
   if (!payload) return;
   openCompareView();
-  compareMetaEl.textContent = payload.prompt ? ('Prompt: ' + String(payload.prompt.length) + ' chars') : '';
+  compareMetaEl.textContent = payload.prompt ? ('Prompt length: ' + String(payload.prompt.length) + ' chars') : '';
   const left = payload.left || {}, right = payload.right || {};
   compareLeftTitleEl.textContent = left.model || '-';
   compareLeftStatsEl.textContent = 'time: ' + (left.elapsedMs || 0) + 'ms | chars: ' + (left.length || 0);
@@ -3042,7 +2448,6 @@ function activate(context) {
         const extraFiles = Array.isArray(msg.contextFiles) ? msg.contextFiles : [];
         if (!task) { webview.postMessage({ type: 'agentError', text: 'Tarea vacía' }); return; }
         const wsContext = await gatherWorkspaceContext(extraFiles);
-        let fileOpSeq = 0;
         streamAgentAutopilot(task, model, wsContext,
           (ev) => {
             if (ev.event === 'thinking') webview.postMessage({ type: 'agentThinking', iteration: ev.iteration, content: ev.content });
@@ -3051,27 +2456,27 @@ function activate(context) {
             else if (ev.event === 'answer') webview.postMessage({ type: 'agentAnswer', content: ev.content });
             else if (ev.event === 'error') webview.postMessage({ type: 'agentError', text: ev.content });
             else if (ev.event === 'file_create') {
-              const opId = 'fileop-' + (++fileOpSeq);
+              const opId = 'fileop-' + (++fileOpCounter);
               pendingFileOps.set(opId, { type: 'create', path: ev.file_path, content: ev.file_content });
               webview.postMessage({ type: 'agentFileCreate', iteration: ev.iteration, path: ev.file_path, opId });
             }
             else if (ev.event === 'file_edit') {
-              const opId = 'fileop-' + (++fileOpSeq);
+              const opId = 'fileop-' + (++fileOpCounter);
               pendingFileOps.set(opId, { type: 'edit', path: ev.file_path, content: ev.file_content });
               webview.postMessage({ type: 'agentFileEdit', iteration: ev.iteration, path: ev.file_path, opId });
             }
             else if (ev.event === 'file_modify') {
-              const opId = 'fileop-' + (++fileOpSeq);
+              const opId = 'fileop-' + (++fileOpCounter);
               pendingFileOps.set(opId, { type: 'modify', path: ev.file_path, content: ev.file_content });
               webview.postMessage({ type: 'agentFileModify', iteration: ev.iteration, path: ev.file_path, opId });
             }
             else if (ev.event === 'file_delete') {
-              const opId = 'fileop-' + (++fileOpSeq);
+              const opId = 'fileop-' + (++fileOpCounter);
               pendingFileOps.set(opId, { type: 'delete', path: ev.file_path });
               webview.postMessage({ type: 'agentFileDelete', iteration: ev.iteration, path: ev.file_path, opId });
             }
             else if (ev.event === 'run_command') {
-              const opId = 'cmdop-' + (++fileOpSeq);
+              const opId = 'cmdop-' + (++fileOpCounter);
               pendingFileOps.set(opId, { type: 'command', command: ev.file_content });
               webview.postMessage({ type: 'agentRunCommand', iteration: ev.iteration, command: ev.file_content, opId });
             }
@@ -3137,14 +2542,16 @@ function activate(context) {
       }
       if (msg.type === 'compare') {
         const prompt = String(msg.text || '').trim();
-        if (!prompt) { webview.postMessage({ type: 'error', text: 'Prompt vacío' }); return; }
+        if (!prompt) { webview.postMessage({ type: 'error', text: 'Prompt vacío para comparación' }); return;
         const selected = await chooseTwoModels();
         if (!selected) return;
+        const [leftModel, rightModel] = selected;
+
         webview.postMessage({ type: 'compareStart' });
         try {
           const [left, right] = await Promise.all([
-            requestChatCompletion(prompt, selected[0], metrics),
-            requestChatCompletion(prompt, selected[1], metrics),
+            requestChatCompletion(prompt, leftModel, metrics),
+            requestChatCompletion(prompt, rightModel, metrics),
           ]);
           await evaluateQualityAlerts('compare', false);
           webview.postMessage({ type: 'compareResult', prompt, left, right });
@@ -3162,10 +2569,18 @@ function activate(context) {
         ], { title: 'Export chat history' });
         if (!format) return;
         const messages = Array.isArray(msg.messages) ? msg.messages : [];
-        let content = '', language = 'plaintext';
-        if (format.value === 'md') { language = 'markdown'; content = messages.map((m) => '## ' + (m.role === 'user' ? 'User' : 'Assistant') + '\\n\\n' + (m.content || '')).join('\\n\\n'); }
-        else if (format.value === 'json') { language = 'json'; content = JSON.stringify(messages, null, 2); }
-        else { content = messages.map((m) => (m.role === 'user' ? 'You: ' : 'AI: ') + (m.content || '')).join('\\n\\n'); }
+        let content = '';
+        let language = 'plaintext';
+        if (format.value === 'md') {
+          language = 'markdown';
+          content = messages.map((m) => '## ' + (m.role === 'user' ? 'User' : 'Assistant') + '\n\n' + (m.content || '')).join('\n\n');
+        } else if (format.value === 'json') {
+          language = 'json';
+          content = JSON.stringify(messages, null, 2);
+        } else {
+          language = 'plaintext';
+          content = messages.map((m) => (m.role === 'user' ? 'You: ' : 'AI: ') + (m.content || '')).join('\n\n');
+        }
         const doc = await vscode.workspace.openTextDocument({ content, language });
         await vscode.window.showTextDocument(doc, { preview: false });
         return;
@@ -3181,7 +2596,7 @@ function activate(context) {
         return;
       }
       if (msg.type === 'clearHistoryRequest') {
-        const confirmed = await vscode.window.showWarningMessage('¿Borrar historial de chat?', 'Clear', 'Cancel');
+        const confirmed = await vscode.window.showWarningMessage('¿Borrar historial de chat del workspace actual?', 'Clear', 'Cancel');
         if (confirmed !== 'Clear') return;
         await saveChatHistory([]);
         await saveSessionState([]);
@@ -3192,9 +2607,20 @@ function activate(context) {
       if (msg.type === 'favoriteAdd') {
         const content = String(msg.content || '').trim();
         if (!content) return;
+
         const favorites = loadFavorites();
-        if (favorites.some((f) => f.content.trim() === content)) { vscode.window.showInformationMessage('Ya está en favoritos'); return; }
-        favorites.push({ id: Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8), title: buildFavoriteTitle(content), content, timestamp: Date.now() });
+        const exists = favorites.some((f) => f.content.trim() === content);
+        if (exists) {
+          vscode.window.showInformationMessage('Este mensaje ya está en favoritos');
+          return;
+        }
+
+        favorites.push({
+          id: Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8),
+          title: buildFavoriteTitle(content),
+          content,
+          timestamp: Date.now(),
+        });
         await saveFavorites(favorites);
         vscode.window.showInformationMessage('Favorito guardado');
         return;
@@ -3202,6 +2628,7 @@ function activate(context) {
       if (msg.type === 'apply') {
         const code = String(msg.code || '');
         if (!code.trim()) return;
+
         const editor = vscode.window.activeTextEditor;
         if (!editor) {
           const ok = await vscode.window.showInformationMessage('Apply code to editor?', 'Yes', 'No');
@@ -3210,6 +2637,7 @@ function activate(context) {
           await vscode.window.showTextDocument(doc, { preview: false });
           return;
         }
+
         const isDiff = code.startsWith('---') || code.startsWith('@@');
         if (isDiff) {
           const ok = await vscode.window.showInformationMessage('Apply code to editor?', 'Yes', 'No');
@@ -3222,7 +2650,6 @@ function activate(context) {
         } else {
           await previewAndApplyCode(editor, code, msg.lang);
         }
-        return;
       }
       if (msg.type === 'insertToFile') {
         const code = String(msg.code || '');
@@ -3238,13 +2665,12 @@ function activate(context) {
         if (!uris || uris.length === 0) return;
         const targetUri = uris[0];
         const doc = await vscode.workspace.openTextDocument(targetUri);
-        const editor = await vscode.window.showTextDocument(doc, { preview: false });
-        const position = editor.selection.active;
-        await editor.edit((editBuilder) => {
+        const editor2 = await vscode.window.showTextDocument(doc, { preview: false });
+        const position = editor2.selection.active;
+        await editor2.edit((editBuilder) => {
           editBuilder.insert(position, code);
         });
         vscode.window.showInformationMessage('Código insertado en: ' + vscode.workspace.asRelativePath(targetUri));
-        return;
       }
     });
   };
@@ -3557,7 +2983,7 @@ function activate(context) {
       const res = await requestChatCompletion(prompt, cfg.chatModel);
       let replacement = String(res?.content || '').trim();
 
-      // Strip markdown fences if present
+      // Strip markdown fences if the LLM added them anyway
       if (replacement.startsWith('```')) {
         const lines = replacement.split('\n');
         lines.shift();
@@ -3570,19 +2996,24 @@ function activate(context) {
         return;
       }
 
-      const targetRange = new vscode.Range(surroundStart, 0, surroundEnd, doc.lineAt(surroundEnd).text.length);
-      const originalText = doc.getText(targetRange);
-      const originalDoc = await vscode.workspace.openTextDocument({ content: originalText, language: lang });
-      const proposedDoc = await vscode.workspace.openTextDocument({ content: replacement, language: lang });
-      await vscode.commands.executeCommand('vscode.diff', originalDoc.uri, proposedDoc.uri, 'Copilot Fix Preview', { preview: true, viewColumn: vscode.ViewColumn.Beside });
+      // Show diff preview
+      const originalText = editor.document.getText(targetRange);
+      const guessedLang = lang;
+      const originalDoc = await vscode.workspace.openTextDocument({ content: originalText, language: guessedLang });
+      const proposedDoc = await vscode.workspace.openTextDocument({ content: replacement, language: guessedLang });
+      await vscode.commands.executeCommand('vscode.diff', originalDoc.uri, proposedDoc.uri, 'Fix with Copilot Local', { preview: true, viewColumn: vscode.ViewColumn.Beside });
 
-      const decision = await vscode.window.showInformationMessage('Apply fix?', 'Apply', 'Discard');
+      const decision = await vscode.window.showInformationMessage(
+        'Fix with Copilot Local — Apply changes?', 'Apply', 'Discard'
+      );
       if (decision === 'Apply') {
         const edit = new vscode.WorkspaceEdit();
-        edit.replace(doc.uri, targetRange, replacement);
-        await vscode.workspace.applyEdit(edit);
-        try { await vscode.commands.executeCommand('editor.action.formatDocument'); } catch {}
-        vscode.window.showInformationMessage('Fix applied');
+        edit.replace(editor.document.uri, targetRange, replacement);
+        const ok = await vscode.workspace.applyEdit(edit);
+        if (ok) {
+          try { await vscode.commands.executeCommand('editor.action.formatDocument'); } catch {}
+          vscode.window.showInformationMessage('Fix applied');
+        }
       }
     } catch (err) {
       vscode.window.showErrorMessage('Fix failed: ' + (err instanceof Error ? err.message : String(err)));
@@ -3965,27 +3396,27 @@ function activate(context) {
             else if (ev.event === 'answer') chatPanel?.webview.postMessage({ type: 'agentAnswer', content: ev.content });
             else if (ev.event === 'error') chatPanel?.webview.postMessage({ type: 'agentError', text: ev.content });
             else if (ev.event === 'file_edit') {
-              const opId = 'fileop-' + (++fileOpSeq);
+              const opId = 'fileop-' + (++fileOpCounter);
               pendingFileOps.set(opId, { type: 'edit', path: ev.file_path, content: ev.file_content });
               chatPanel?.webview.postMessage({ type: 'agentFileEdit', iteration: ev.iteration, path: ev.file_path, opId });
             }
             else if (ev.event === 'file_create') {
-              const opId = 'fileop-' + (++fileOpSeq);
+              const opId = 'fileop-' + (++fileOpCounter);
               pendingFileOps.set(opId, { type: 'create', path: ev.file_path, content: ev.file_content });
               chatPanel?.webview.postMessage({ type: 'agentFileCreate', iteration: ev.iteration, path: ev.file_path, opId });
             }
             else if (ev.event === 'file_modify') {
-              const opId = 'fileop-' + (++fileOpSeq);
+              const opId = 'fileop-' + (++fileOpCounter);
               pendingFileOps.set(opId, { type: 'modify', path: ev.file_path, content: ev.file_content });
               chatPanel?.webview.postMessage({ type: 'agentFileModify', iteration: ev.iteration, path: ev.file_path, opId });
             }
             else if (ev.event === 'file_delete') {
-              const opId = 'fileop-' + (++fileOpSeq);
+              const opId = 'fileop-' + (++fileOpCounter);
               pendingFileOps.set(opId, { type: 'delete', path: ev.file_path });
               chatPanel?.webview.postMessage({ type: 'agentFileDelete', iteration: ev.iteration, path: ev.file_path, opId });
             }
             else if (ev.event === 'run_command') {
-              const opId = 'cmdop-' + (++fileOpSeq);
+              const opId = 'cmdop-' + (++fileOpCounter);
               pendingFileOps.set(opId, { type: 'command', command: ev.file_content });
               chatPanel?.webview.postMessage({ type: 'agentRunCommand', iteration: ev.iteration, command: ev.file_content, opId });
             }
@@ -4894,7 +4325,6 @@ function activate(context) {
       vscode.window.showErrorMessage('No se pudo leer staged diff: ' + (err instanceof Error ? err.message : String(err)));
       return;
     }
-
     if (!diff.trim()) {
       vscode.window.showInformationMessage('No hay cambios staged para generar commit message');
       return;

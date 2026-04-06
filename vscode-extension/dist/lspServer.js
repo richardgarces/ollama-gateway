@@ -53,8 +53,52 @@ connection.onInitialize((params) => {
                 resolveProvider: false,
                 triggerCharacters: ['.', '(', ',', ':', '{', '[', '<', ' ', '\n', '=', '/', '@', '#'],
             },
+            renameProvider: true,
         },
     };
+    connection.onRenameRequest(async (params) => {
+        const doc = documents.get(params.textDocument.uri);
+        if (!doc)
+            return null;
+        const text = doc.getText();
+        const pos = doc.offsetAt(params.position);
+        // Encuentra la palabra bajo el cursor
+        const wordRegex = /[\w$]+/g;
+        let match;
+        let start = 0, end = 0;
+        while ((match = wordRegex.exec(text))) {
+            if (pos >= match.index && pos <= match.index + match[0].length) {
+                start = match.index;
+                end = match.index + match[0].length;
+                break;
+            }
+        }
+        if (start === end)
+            return null;
+        const oldName = text.slice(start, end);
+        const newName = params.newName;
+        // Busca todas las ocurrencias exactas de oldName en el texto
+        const edits = [];
+        wordRegex.lastIndex = 0;
+        while ((match = wordRegex.exec(text))) {
+            if (match[0] === oldName) {
+                edits.push({
+                    range: {
+                        start: doc.positionAt(match.index),
+                        end: doc.positionAt(match.index + oldName.length),
+                    },
+                    newText: newName,
+                });
+            }
+        }
+        if (!edits.length)
+            return null;
+        return {
+            changes: {
+                [params.textDocument.uri]: edits,
+            },
+        };
+    });
 });
 async function postJSON(endpoint, payload) {
     const url = new url_1.URL(apiUrl + endpoint);

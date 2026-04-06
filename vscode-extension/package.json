@@ -2,7 +2,7 @@
   "name": "copilot-local",
   "displayName": "Copilot Local",
   "description": "Local AI Copilot with sidebar chat, inline completions, RAG and streaming",
-  "version": "0.2.12",
+  "version": "0.2.25",
   "engines": {
     "vscode": "^1.60.0"
   },
@@ -72,9 +72,21 @@
           "type": "webview",
           "id": "copilotLocal.chatView",
           "name": "Chat"
+        },
+        {
+          "type": "webview",
+          "id": "copilotLocal.workingSetView",
+          "name": "Working Set / Timeline"
         }
       ]
     },
+    "notebookSerializer": [
+      {
+        "viewType": "jupyter-notebook",
+        "displayName": "Jupyter Notebook (Copilot Local)",
+        "filenamePattern": "*.ipynb"
+      }
+    ],
     "commands": [
       {
         "command": "copilot-local.sendSelection",
