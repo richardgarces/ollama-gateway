@@ -13,6 +13,7 @@ import (
 
 type AuthMiddleware struct {
 	jwtSecret []byte
+	enabled   bool
 }
 
 type AuditRecorder interface {
@@ -39,12 +40,19 @@ func SetAuditRecorder(recorder AuditRecorder) {
 	auditRecorder = recorder
 }
 
-func NewAuthMiddleware(jwtSecret []byte) *AuthMiddleware {
-	return &AuthMiddleware{jwtSecret: jwtSecret}
+func NewAuthMiddleware(jwtSecret []byte, enabled bool) *AuthMiddleware {
+	return &AuthMiddleware{jwtSecret: jwtSecret, enabled: enabled}
 }
 
 func (m *AuthMiddleware) JWT(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !m.enabled {
+			ctx := context.WithValue(r.Context(), userIDContextKey, "anonymous")
+			ctx = context.WithValue(ctx, roleContextKey, "admin")
+			ctx = context.WithValue(ctx, scopesContextKey, []string{"*"})
+			next.ServeHTTP(w, r.WithContext(ctx))
+			return
+		}
 		authHeader := r.Header.Get("Authorization")
 		if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
 			if auditRecorder != nil {

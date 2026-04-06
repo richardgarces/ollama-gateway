@@ -73,7 +73,8 @@ func (s *AutopilotService) RunStream(ctx context.Context, task, model string, ws
 		"- list_workspace (workspace): lista los archivos del workspace del usuario. No requiere args.\n" +
 		"- read_workspace_file (workspace): lee un archivo del workspace. Args: {\"path\": \"relative/path\"}\n" +
 		"- create_file (workspace): crea un archivo nuevo en el workspace. Args: {\"path\": \"relative/path\", \"content\": \"contenido completo del archivo\"}\n" +
-		"- modify_file (workspace): modifica un archivo existente en el workspace. Args: {\"path\": \"relative/path\", \"content\": \"contenido nuevo completo del archivo\"}\n" +
+		"- edit_file (workspace): edita un archivo existente reemplazando un fragmento específico. Args: {\"path\": \"relative/path\", \"search\": \"texto exacto a buscar\", \"replace\": \"texto de reemplazo\"}. Incluye unas pocas líneas de contexto en search para ser preciso.\n" +
+		"- modify_file (workspace): reemplaza TODO el contenido de un archivo. Solo úsalo si necesitas reescribir el archivo completo. Args: {\"path\": \"relative/path\", \"content\": \"contenido nuevo completo del archivo\"}\n" +
 		"- delete_file (workspace): elimina un archivo del workspace. Args: {\"path\": \"relative/path\"}\n" +
 		"- run_command (workspace): ejecuta un comando en la terminal del workspace (git, npm, go, etc). Args: {\"command\": \"comando a ejecutar\"}"
 
@@ -104,10 +105,11 @@ func (s *AutopilotService) RunStream(ctx context.Context, task, model string, ws
 		"2. Para usar una herramienta: {\"action\":\"nombre_tool\",\"args\":{\"key\":\"value\"},\"thought\":\"tu razonamiento\"}\n" +
 		"3. Para dar la respuesta final: {\"action\":\"answer\",\"response\":\"tu respuesta completa\",\"thought\":\"resumen\"}\n" +
 		"4. Analiza los resultados de herramientas anteriores antes de decidir el siguiente paso.\n" +
-		"5. Para crear o modificar archivos, usa create_file o modify_file con el contenido COMPLETO del archivo.\n" +
+		"5. Para editar archivos, PREFIERE edit_file (edición parcial search/replace) sobre modify_file. Usa modify_file solo si necesitas reescribir el archivo entero.\n" +
 		"6. Para eliminar archivos, usa delete_file.\n" +
 		"7. Para ejecutar comandos del sistema (git, npm, go build, etc.), usa run_command.\n" +
-		"8. Máximo " + fmt.Sprintf("%d", maxAutopilotIterations) + " iteraciones." +
+		"8. Si la tarea requiere información actualizada de Internet (noticias, documentación, precios, fechas, etc.), usa web_search.\n" +
+		"9. Máximo " + fmt.Sprintf("%d", maxAutopilotIterations) + " iteraciones." +
 		wsInfo
 
 	if model == "" {
@@ -179,7 +181,7 @@ func (s *AutopilotService) RunStream(ctx context.Context, task, model string, ws
 				listing = "(workspace vacío o sin archivos)"
 			}
 			onEvent(AutopilotEvent{Event: "tool_result", Iteration: i, Tool: "list_workspace", Success: &t, Output: listing})
-			history = append(history, fmt.Sprintf("PASO %d: list_workspace → %d archivos", i, len(wsCtx.Tree)))
+			history = append(history, fmt.Sprintf("PASO %d: list_workspace → %d archivos:\n%s", i, len(wsCtx.Tree), truncateForHistory(listing, 3000)))
 			continue
 
 		case "read_workspace_file":
@@ -191,7 +193,7 @@ func (s *AutopilotService) RunStream(ctx context.Context, task, model string, ws
 					truncated = truncated[:6000] + "\n...(truncado)"
 				}
 				onEvent(AutopilotEvent{Event: "tool_result", Iteration: i, Tool: "read_workspace_file", Success: &t, Output: truncated})
-				history = append(history, fmt.Sprintf("PASO %d: read_workspace_file(%s) → %d chars", i, path, len(content)))
+				history = append(history, fmt.Sprintf("PASO %d: read_workspace_file(%s) →\n%s", i, path, truncateForHistory(content, 4000)))
 			} else {
 				// Try server-side read_file as fallback
 				if tool, ok := s.toolRegistry.Get("read_file"); ok {
@@ -207,7 +209,7 @@ func (s *AutopilotService) RunStream(ctx context.Context, task, model string, ws
 							truncated = truncated[:6000] + "\n...(truncado)"
 						}
 						onEvent(AutopilotEvent{Event: "tool_result", Iteration: i, Tool: "read_workspace_file", Success: &t, Output: truncated})
-						history = append(history, fmt.Sprintf("PASO %d: read_workspace_file(%s) → %d chars (server)", i, path, len(out)))
+						history = append(history, fmt.Sprintf("PASO %d: read_workspace_file(%s) →\n%s", i, path, truncateForHistory(out, 4000)))
 					}
 				} else {
 					f := false
@@ -258,6 +260,28 @@ func (s *AutopilotService) RunStream(ctx context.Context, task, model string, ws
 			})
 			onEvent(AutopilotEvent{Event: "tool_result", Iteration: i, Tool: "modify_file", Success: &t, Output: "Cambios propuestos para: " + path + " (pendiente de aceptación del usuario)"})
 			history = append(history, fmt.Sprintf("PASO %d: modify_file(%s) → propuesto al usuario", i, path))
+			continue
+
+		case "edit_file":
+			path := args["path"]
+			search := args["search"]
+			replace := args["replace"]
+			if path == "" || search == "" {
+				f := false
+				onEvent(AutopilotEvent{Event: "tool_result", Iteration: i, Tool: "edit_file", Success: &f, Output: "path y search son requeridos"})
+				history = append(history, fmt.Sprintf("PASO %d: edit_file → falta path o search", i))
+				continue
+			}
+			t := true
+			onEvent(AutopilotEvent{
+				Event:       "file_edit",
+				Iteration:   i,
+				Tool:        "edit_file",
+				FilePath:    path,
+				FileContent: search + "\n---REPLACE---\n" + replace,
+			})
+			onEvent(AutopilotEvent{Event: "tool_result", Iteration: i, Tool: "edit_file", Success: &t, Output: "Edición propuesta para: " + path + " (pendiente de aceptación del usuario)"})
+			history = append(history, fmt.Sprintf("PASO %d: edit_file(%s) → search/replace propuesto al usuario", i, path))
 			continue
 
 		case "delete_file":
@@ -322,12 +346,19 @@ func (s *AutopilotService) RunStream(ctx context.Context, task, model string, ws
 			}
 			t := true
 			onEvent(AutopilotEvent{Event: "tool_result", Iteration: i, Tool: parsed.Action, Success: &t, Output: truncated})
-			history = append(history, fmt.Sprintf("PASO %d: %s(%v) → %d chars", i, parsed.Action, args, len(output)))
+			history = append(history, fmt.Sprintf("PASO %d: %s(%v) →\n%s", i, parsed.Action, args, truncateForHistory(output, 4000)))
 		}
 	}
 
 	onEvent(AutopilotEvent{Event: "answer", Iteration: maxAutopilotIterations, Content: "Se alcanzó el límite de iteraciones. Revisa los pasos anteriores para resultados parciales."})
 	return nil
+}
+
+func truncateForHistory(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "\n...(truncado)"
 }
 
 func stripCodeFence(s string) string {

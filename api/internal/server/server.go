@@ -89,6 +89,7 @@ import (
 	runtimeconfigtransport "ollama-gateway/internal/function/runtime_config/transport"
 	sandboxservice "ollama-gateway/internal/function/sandbox"
 	sandboxtransport "ollama-gateway/internal/function/sandbox/transport"
+	searchservice "ollama-gateway/internal/function/search"
 	searchtransport "ollama-gateway/internal/function/search/transport"
 	securityservice "ollama-gateway/internal/function/security"
 	securitytransport "ollama-gateway/internal/function/security/transport"
@@ -286,6 +287,17 @@ func (s *Server) setupRoutes() {
 	ollamaService := coreservice.NewOllamaService(s.cfg, logger, s.cache)
 	routerService := coreservice.NewRouterService(s.cfg, ollamaService, logger)
 	toolRegistry := coreservice.NewToolRegistry(s.cfg.AgentToolsDir, s.cfg.RepoRoot, logger)
+
+	// Web search (Ollama cloud)
+	webSearchService := searchservice.NewWebSearchService(s.cfg.OllamaAPIKey, logger)
+	if webSearchService.Enabled() {
+		webSearchTool := searchservice.NewWebSearchTool(webSearchService)
+		toolRegistry.RegisterTool("web_search", "Busca información actualizada en la web. Args: {\"query\": \"tu consulta\"}", webSearchTool)
+		logger.Info("web_search tool registrada (OLLAMA_API_KEY presente)")
+	} else {
+		logger.Info("web_search tool deshabilitada (OLLAMA_API_KEY vacía)")
+	}
+
 	agentService := agentservice.NewService(ollamaService, logger, toolRegistry)
 	autopilotService := agentservice.NewAutopilotService(ollamaService, logger, toolRegistry)
 	conversationService, err := coreservice.NewConversationServiceWithPool(
@@ -573,13 +585,16 @@ func (s *Server) setupRoutes() {
 	dashboardHandler := dashboardtransport.NewHandler(s.cfg, metricsCollector, indexerService, logStream)
 	searchHandler := searchtransport.NewHandler(ollamaClient, vectorStore, repoRoots)
 	openaiHandler := openaitransport.NewHandler(ollamaClient, ragEngine, s.conversationService, s.profileService)
+	if webSearchService.Enabled() {
+		openaiHandler.SetWebSearcher(webSearchService)
+	}
 	completeService := completeservice.NewService(ollamaService, s.cfg.FIMModel)
 	completeHandler := completetransport.NewHandler(completeService)
 	wsHandler := wstransport.NewHandler(ragEngine, s.cfg.JWTSecret)
 	apiExplorerHandler := apiexplorertransport.NewHandler(GetRouteDefinitions())
 	healthHandler := healthtransport.NewHandler(s.cfg)
 	healthHandler.SetCircuitBreakers(ollamaService, qdrantService)
-	authMiddleware := middleware.NewAuthMiddleware(s.cfg.JWTSecret)
+	authMiddleware := middleware.NewAuthMiddleware(s.cfg.JWTSecret, s.cfg.JWTEnabled)
 	auditSvc := auditservice.NewService(5000)
 	middleware.SetAuditRecorder(auditSvc)
 	auditHandler := audittransport.NewHandler(auditSvc)

@@ -64,6 +64,16 @@ func (r *ToolRegistry) Get(name string) (Tool, bool) {
 	return tool, ok
 }
 
+// RegisterTool allows external packages to register a tool with the registry.
+func (r *ToolRegistry) RegisterTool(name, description string, tool Tool) {
+	r.register(toolSpec{
+		Name:        name,
+		Description: description,
+		Type:        "function",
+		Parameters:  map[string]string{},
+	}, tool)
+}
+
 func (r *ToolRegistry) ToolDescriptions() []string {
 	if len(r.toolSpecs) == 0 {
 		return nil

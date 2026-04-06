@@ -89,7 +89,7 @@ func TestCompress(t *testing.T) {
 }
 
 func TestAuthMiddlewareJWT(t *testing.T) {
-	mw := NewAuthMiddleware([]byte("secret"))
+	mw := NewAuthMiddleware([]byte("secret"), true)
 	h := mw.JWT(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if UserIDFromContext(r.Context()) != "admin" {
 			t.Fatalf("expected user in context")
@@ -115,7 +115,7 @@ func TestAuthMiddlewareJWT(t *testing.T) {
 }
 
 func TestAuthMiddlewareRoleAndScopes(t *testing.T) {
-	mw := NewAuthMiddleware([]byte("secret"))
+	mw := NewAuthMiddleware([]byte("secret"), true)
 	h := mw.JWT(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if RoleFromContext(r.Context()) != "maintainer" {
 			t.Fatalf("expected maintainer role")
@@ -144,7 +144,7 @@ func TestAuthMiddlewareRoleAndScopes(t *testing.T) {
 }
 
 func TestRequireScope(t *testing.T) {
-	mw := NewAuthMiddleware([]byte("secret"))
+	mw := NewAuthMiddleware([]byte("secret"), true)
 	h := mw.JWT(RequireScope("patch:apply")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})))

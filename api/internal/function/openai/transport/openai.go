@@ -17,6 +17,13 @@ type OpenAIHandler struct {
 	rag           domain.RAGEngine
 	conversations domain.ConversationStore
 	profiles      domain.ProfileStore
+	webSearcher   WebSearcher
+}
+
+// WebSearcher is an optional interface for web search enrichment.
+type WebSearcher interface {
+	Enabled() bool
+	SearchFormatted(ctx context.Context, query string) (string, error)
 }
 
 func NewOpenAIHandler(
@@ -26,6 +33,11 @@ func NewOpenAIHandler(
 	p domain.ProfileStore,
 ) *OpenAIHandler {
 	return &OpenAIHandler{ollama: o, rag: r, conversations: c, profiles: p}
+}
+
+// SetWebSearcher injects an optional web search service for auto-enrichment.
+func (h *OpenAIHandler) SetWebSearcher(ws WebSearcher) {
+	h.webSearcher = ws
 }
 
 type embeddingReq struct {
@@ -162,6 +174,9 @@ func (h *OpenAIHandler) ChatCompletions(w http.ResponseWriter, r *http.Request) 
 	if req.Lang != "" && !hasSystemMessage(runtimeMessages) {
 		runtimeMessages = append([]domain.Message{{Role: "system", Content: "Respond in language: " + req.Lang}}, runtimeMessages...)
 	}
+
+	// Auto-enrich with web search when the user query looks like it needs current info.
+	runtimeMessages = h.maybeEnrichWithWebSearch(r.Context(), runtimeMessages)
 
 	model := req.Model
 	if model == "" {
@@ -332,4 +347,76 @@ func withLangDirective(prompt, lang string) string {
 		return prompt
 	}
 	return "[prompt_lang=" + lang + "]\n" + prompt
+}
+
+// maybeEnrichWithWebSearch detects if the user query is likely about current
+// events or factual web info, and if so, injects search results as context.
+func (h *OpenAIHandler) maybeEnrichWithWebSearch(ctx context.Context, messages []domain.Message) []domain.Message {
+	if h.webSearcher == nil || !h.webSearcher.Enabled() {
+		return messages
+	}
+
+	userQuery := lastUserContent(messages)
+	if userQuery == "" || !looksLikeWebQuery(userQuery) {
+		return messages
+	}
+
+	formatted, err := h.webSearcher.SearchFormatted(ctx, userQuery)
+	if err != nil || formatted == "" {
+		return messages
+	}
+
+	// Insert web search context as a system message right before the last user message.
+	enriched := make([]domain.Message, 0, len(messages)+1)
+	for i, m := range messages {
+		if i == len(messages)-1 && strings.EqualFold(m.Role, "user") {
+			enriched = append(enriched, domain.Message{
+				Role:    "system",
+				Content: "El usuario hizo una pregunta que puede requerir información actualizada. Aquí hay resultados de búsqueda web relevantes. Úsalos como contexto para responder de forma precisa:\n\n" + formatted,
+			})
+		}
+		enriched = append(enriched, m)
+	}
+	return enriched
+}
+
+func lastUserContent(messages []domain.Message) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if strings.EqualFold(messages[i].Role, "user") {
+			return strings.TrimSpace(messages[i].Content)
+		}
+	}
+	return ""
+}
+
+// looksLikeWebQuery heuristically determines if a query needs web information.
+func looksLikeWebQuery(query string) bool {
+	q := strings.ToLower(query)
+	// Patterns that suggest the user wants current/web information.
+	webPatterns := []string{
+		"qué es ", "que es ", "what is ", "what are ",
+		"quién es ", "quien es ", "who is ",
+		"cuándo ", "cuando ", "when ",
+		"dónde ", "donde ", "where ",
+		"busca ", "buscar ", "search ",
+		"noticias ", "news ",
+		"última ", "ultimo ", "últimas ", "latest ",
+		"actual ", "current ",
+		"precio ", "price ",
+		"cómo funciona ", "como funciona ", "how does ",
+		"wikipedia", "google",
+		"2024", "2025", "2026",
+		"hoy ", "today ",
+		"reciente", "recent",
+	}
+	for _, p := range webPatterns {
+		if strings.Contains(q, p) {
+			return true
+		}
+	}
+	// Questions starting with interrogative markers.
+	if strings.HasPrefix(q, "¿") || strings.HasPrefix(q, "?") {
+		return true
+	}
+	return false
 }

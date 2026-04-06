@@ -24,6 +24,7 @@ type Config struct {
 	OllamaKeepAlive        string
 	AutoQuantizeModels     bool
 	QdrantURL              string
+	JWTEnabled             bool
 	JWTSecret              []byte
 	LogLevel               string
 	LogFormat              string
@@ -77,6 +78,7 @@ type Config struct {
 	OTelExporterOTLPEndpoint string
 	OTelExporterInsecure     bool
 	OTelSamplePercent        int
+	OllamaAPIKey             string
 }
 
 func Load() *Config {
@@ -113,6 +115,7 @@ func loadFromEnv() *Config {
 		OllamaKeepAlive:          getEnv("OLLAMA_KEEP_ALIVE", "-1"),
 		AutoQuantizeModels:       getEnvAsBool("AUTO_QUANTIZE_MODELS", true),
 		QdrantURL:                getEnv("QDRANT_URL", "http://qdrant:6333"),
+		JWTEnabled:               getEnvAsBool("JWT_ENABLED", false),
 		JWTSecret:                loadJWTSecret(),
 		LogLevel:                 getEnv("LOG_LEVEL", "info"),
 		LogFormat:                getEnv("LOG_FORMAT", "json"),
@@ -164,6 +167,7 @@ func loadFromEnv() *Config {
 		OTelExporterOTLPEndpoint: getEnv("OTEL_EXPORTER_OTLP_ENDPOINT", "localhost:4317"),
 		OTelExporterInsecure:     getEnvAsBool("OTEL_EXPORTER_OTLP_INSECURE", true),
 		OTelSamplePercent:        getEnvAsInt("OTEL_SAMPLE_PERCENT", 100),
+		OllamaAPIKey:             getEnv("OLLAMA_API_KEY", ""),
 	}
 }
 
