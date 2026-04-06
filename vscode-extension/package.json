@@ -2,7 +2,7 @@
   "name": "copilot-local",
   "displayName": "Copilot Local",
   "description": "Local AI Copilot with sidebar chat, inline completions, RAG and streaming",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "engines": {
     "vscode": "^1.60.0"
   },
@@ -33,7 +33,9 @@
     "onCommand:copilot-local.architectReview",
     "onCommand:copilot-local.securityScanCurrentFile",
     "onCommand:copilot-local.generatePipelineAndOpen",
-    "onCommand:copilot-local.createPRSummary"
+    "onCommand:copilot-local.createPRSummary",
+    "onCommand:copilot-local.inlineChat",
+    "onCommand:copilot-local.fixTerminalError"
   ],
   "main": "dist/extension.js",
   "scripts": {
@@ -208,6 +210,16 @@
         "icon": "$(git-pull-request)"
       },
       {
+        "command": "copilot-local.inlineChat",
+        "title": "Copilot Local: Inline Chat",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "copilot-local.fixTerminalError",
+        "title": "Copilot Local: Fix Terminal Error",
+        "icon": "$(terminal)"
+      },
+      {
         "command": "copilot-local.newChat",
         "title": "New Chat",
         "icon": "$(add)"
@@ -247,6 +259,12 @@
         "command": "copilot-local.fixErrors",
         "key": "ctrl+shift+f",
         "mac": "cmd+shift+f",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "copilot-local.inlineChat",
+        "key": "ctrl+i",
+        "mac": "cmd+i",
         "when": "editorTextFocus"
       }
     ],
@@ -341,6 +359,10 @@
         },
         {
           "command": "copilot-local.switchProfile",
+          "group": "1_main"
+        },
+        {
+          "command": "copilot-local.inlineChat",
           "group": "1_main"
         },
         {

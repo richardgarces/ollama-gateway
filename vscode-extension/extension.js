@@ -41,6 +41,37 @@ function buildWorkspaceProfiles(customProfiles, fallbackModel) {
   return out;
 }
 
+/**
+ * Enriches a user prompt with semantically relevant code snippets from the indexed repo.
+ * Calls /api/v2/search and prepends results as context.
+ * Returns the enriched prompt string (or the original if search fails/returns nothing).
+ */
+async function enrichWithSemanticContext(prompt) {
+  if (!prompt || prompt.length < 10) return prompt;
+  try {
+    const res = await postJSON('/api/v2/search', { query: prompt, top: 3 });
+    const hits = Array.isArray(res?.result) ? res.result : [];
+    if (hits.length === 0) return prompt;
+
+    const snippets = hits
+      .filter((h) => h.payload?.content)
+      .map((h) => {
+        const p = h.payload.path || 'unknown';
+        let content = String(h.payload.content);
+        if (content.length > 2000) content = content.slice(0, 2000) + '\n...(truncated)';
+        return '--- ' + p + ' ---\n' + content;
+      });
+
+    if (snippets.length === 0) return prompt;
+
+    return 'The following code snippets from the repository may be relevant:\n\n' +
+      snippets.join('\n\n') +
+      '\n\n---\nUser question:\n' + prompt;
+  } catch {
+    return prompt;
+  }
+}
+
 function buildChatMessages(prompt, lang) {
   const desiredLang = String(lang || '').trim();
   const messages = [];
@@ -2680,6 +2711,54 @@ function activate(context) {
     }
   };
 
+  const handleAgentFileEdit = async (filePath, searchReplace, webview) => {
+    const wsFolder = vscode.workspace.workspaceFolders?.[0];
+    if (!wsFolder) { vscode.window.showErrorMessage('No hay workspace abierto'); return; }
+
+    const uri = vscode.Uri.joinPath(wsFolder.uri, filePath);
+    let originalContent = '';
+    try {
+      const raw = await vscode.workspace.fs.readFile(uri);
+      originalContent = Buffer.from(raw).toString('utf8');
+    } catch {
+      vscode.window.showErrorMessage('Archivo no encontrado: ' + filePath);
+      return;
+    }
+
+    const sep = '\n---REPLACE---\n';
+    const sepIdx = searchReplace.indexOf(sep);
+    if (sepIdx < 0) {
+      vscode.window.showErrorMessage('edit_file: formato de edición inválido');
+      return;
+    }
+    const search = searchReplace.slice(0, sepIdx);
+    const replace = searchReplace.slice(sepIdx + sep.length);
+
+    const idx = originalContent.indexOf(search);
+    if (idx < 0) {
+      vscode.window.showErrorMessage('edit_file: no se encontró el texto a reemplazar en ' + filePath);
+      return;
+    }
+
+    const proposedContent = originalContent.slice(0, idx) + replace + originalContent.slice(idx + search.length);
+
+    const lang = guessLanguageFromPath(filePath);
+    const originalDoc = await vscode.workspace.openTextDocument({ content: originalContent, language: lang });
+    const proposedDoc = await vscode.workspace.openTextDocument({ content: proposedContent, language: lang });
+    await vscode.commands.executeCommand('vscode.diff', originalDoc.uri, proposedDoc.uri, '🤖 Agent edit: ' + filePath, { preview: true, viewColumn: vscode.ViewColumn.Beside });
+
+    const decision = await vscode.window.showInformationMessage(
+      '🤖 Agent propone editar: ' + filePath, 'Aplicar cambios', 'Descartar'
+    );
+    if (decision === 'Aplicar cambios') {
+      await vscode.workspace.fs.writeFile(uri, Buffer.from(proposedContent, 'utf8'));
+      vscode.window.showInformationMessage('Archivo editado: ' + filePath);
+      webview.postMessage({ type: 'agentFileResult', path: filePath, action: 'edit', accepted: true });
+    } else {
+      webview.postMessage({ type: 'agentFileResult', path: filePath, action: 'edit', accepted: false });
+    }
+  };
+
   const handleAgentFileModify = async (filePath, proposedContent, webview) => {
     const wsFolder = vscode.workspace.workspaceFolders?.[0];
     if (!wsFolder) { vscode.window.showErrorMessage('No hay workspace abierto'); return; }
@@ -2798,7 +2877,8 @@ function activate(context) {
           }
           return;
         }
-        streamWithFallback(resolvedText, model,
+        const enrichedText = await enrichWithSemanticContext(resolvedText);
+        streamWithFallback(enrichedText, model,
           (chunk) => webview.postMessage({ type: 'chunk', text: chunk }),
           (err) => {
             evaluateQualityAlerts('chat', !!err);
@@ -2826,6 +2906,11 @@ function activate(context) {
               const opId = 'fileop-' + (++fileOpSeq);
               pendingFileOps.set(opId, { type: 'create', path: ev.file_path, content: ev.file_content });
               webview.postMessage({ type: 'agentFileCreate', iteration: ev.iteration, path: ev.file_path, opId });
+            }
+            else if (ev.event === 'file_edit') {
+              const opId = 'fileop-' + (++fileOpSeq);
+              pendingFileOps.set(opId, { type: 'edit', path: ev.file_path, content: ev.file_content });
+              webview.postMessage({ type: 'agentFileEdit', iteration: ev.iteration, path: ev.file_path, opId });
             }
             else if (ev.event === 'file_modify') {
               const opId = 'fileop-' + (++fileOpSeq);
@@ -2874,6 +2959,8 @@ function activate(context) {
           await handleAgentFileCreate(op.path, op.content, webview);
         } else if (op.type === 'delete') {
           await handleAgentFileDelete(op.path, webview);
+        } else if (op.type === 'edit') {
+          await handleAgentFileEdit(op.path, op.content, webview);
         } else {
           await handleAgentFileModify(op.path, op.content, webview);
         }
@@ -3381,7 +3468,8 @@ function activate(context) {
           return;
         }
 
-        streamWithFallback(resolvedText, model,
+        const enrichedText = await enrichWithSemanticContext(resolvedText);
+        streamWithFallback(enrichedText, model,
           (chunk) => chatPanel?.webview.postMessage({ type: 'chunk', text: chunk }),
           (err) => {
             evaluateQualityAlerts('chat', !!err);
@@ -3405,6 +3493,31 @@ function activate(context) {
             else if (ev.event === 'tool_result') chatPanel?.webview.postMessage({ type: 'agentToolResult', iteration: ev.iteration, tool: ev.tool, success: ev.success, output: ev.output });
             else if (ev.event === 'answer') chatPanel?.webview.postMessage({ type: 'agentAnswer', content: ev.content });
             else if (ev.event === 'error') chatPanel?.webview.postMessage({ type: 'agentError', text: ev.content });
+            else if (ev.event === 'file_edit') {
+              const opId = 'fileop-' + (++fileOpSeq);
+              pendingFileOps.set(opId, { type: 'edit', path: ev.file_path, content: ev.file_content });
+              chatPanel?.webview.postMessage({ type: 'agentFileEdit', iteration: ev.iteration, path: ev.file_path, opId });
+            }
+            else if (ev.event === 'file_create') {
+              const opId = 'fileop-' + (++fileOpSeq);
+              pendingFileOps.set(opId, { type: 'create', path: ev.file_path, content: ev.file_content });
+              chatPanel?.webview.postMessage({ type: 'agentFileCreate', iteration: ev.iteration, path: ev.file_path, opId });
+            }
+            else if (ev.event === 'file_modify') {
+              const opId = 'fileop-' + (++fileOpSeq);
+              pendingFileOps.set(opId, { type: 'modify', path: ev.file_path, content: ev.file_content });
+              chatPanel?.webview.postMessage({ type: 'agentFileModify', iteration: ev.iteration, path: ev.file_path, opId });
+            }
+            else if (ev.event === 'file_delete') {
+              const opId = 'fileop-' + (++fileOpSeq);
+              pendingFileOps.set(opId, { type: 'delete', path: ev.file_path });
+              chatPanel?.webview.postMessage({ type: 'agentFileDelete', iteration: ev.iteration, path: ev.file_path, opId });
+            }
+            else if (ev.event === 'run_command') {
+              const opId = 'cmdop-' + (++fileOpSeq);
+              pendingFileOps.set(opId, { type: 'command', command: ev.file_content });
+              chatPanel?.webview.postMessage({ type: 'agentRunCommand', iteration: ev.iteration, command: ev.file_content, opId });
+            }
           },
           (err) => {
             if (err) chatPanel?.webview.postMessage({ type: 'agentError', text: err.message || String(err) });
@@ -3555,6 +3668,45 @@ function activate(context) {
           editBuilder.insert(position, code);
         });
         vscode.window.showInformationMessage('Código insertado en: ' + vscode.workspace.asRelativePath(targetUri));
+      }
+      if (msg.type === 'acceptFileOp') {
+        const opId = msg.opId;
+        const op = pendingFileOps.get(opId);
+        if (!op) return;
+        pendingFileOps.delete(opId);
+        const wv = chatPanel?.webview;
+        if (!wv) return;
+        if (op.type === 'create') {
+          await handleAgentFileCreate(op.path, op.content, wv);
+        } else if (op.type === 'delete') {
+          await handleAgentFileDelete(op.path, wv);
+        } else if (op.type === 'edit') {
+          await handleAgentFileEdit(op.path, op.content, wv);
+        } else {
+          await handleAgentFileModify(op.path, op.content, wv);
+        }
+        wv.postMessage({ type: 'agentFileResult', opId, accepted: true });
+        return;
+      }
+      if (msg.type === 'rejectFileOp') {
+        const opId = msg.opId;
+        pendingFileOps.delete(opId);
+        chatPanel?.webview.postMessage({ type: 'agentFileResult', opId, accepted: false });
+        return;
+      }
+      if (msg.type === 'acceptCommand') {
+        const opId = msg.opId;
+        const op = pendingFileOps.get(opId);
+        if (!op || op.type !== 'command') return;
+        pendingFileOps.delete(opId);
+        await handleAgentRunCommand(op.command, opId, chatPanel?.webview);
+        return;
+      }
+      if (msg.type === 'rejectCommand') {
+        const opId = msg.opId;
+        pendingFileOps.delete(opId);
+        chatPanel?.webview.postMessage({ type: 'agentCommandResult', opId, accepted: false });
+        return;
       }
     });
 
@@ -3988,6 +4140,78 @@ function activate(context) {
     await sendSelectionPrompt('Fix the errors in this code:');
   }));
 
+  context.subscriptions.push(vscode.commands.registerCommand('copilot-local.inlineChat', async () => {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) {
+      vscode.window.showInformationMessage('No active editor');
+      return;
+    }
+
+    const hasSelection = !editor.selection.isEmpty;
+    const selectedText = hasSelection
+      ? editor.document.getText(editor.selection)
+      : editor.document.lineAt(editor.selection.active.line).text;
+    const targetRange = hasSelection
+      ? editor.selection
+      : editor.document.lineAt(editor.selection.active.line).range;
+
+    const instruction = await vscode.window.showInputBox({
+      prompt: 'Inline Chat — Describe the change you want',
+      placeHolder: 'e.g. add error handling, rename variable, optimize...',
+    });
+    if (!instruction) return;
+
+    const lang = editor.document.languageId || 'plaintext';
+    const prompt = 'You are a code editor. The user selected the following code (' + lang + '):\n\n```' + lang + '\n' + selectedText + '\n```\n\n' +
+      'Instruction: ' + instruction + '\n\n' +
+      'Return ONLY the replacement code. No explanations, no markdown fences, no extra text. Just the code that should replace the selection.';
+
+    const statusItem = vscode.window.setStatusBarMessage('$(loading~spin) Inline Chat...');
+
+    try {
+      const cfg = getConfig();
+      const res = await requestChatCompletion(prompt, cfg.chatModel);
+      let replacement = String(res?.content || '').trim();
+
+      // Strip markdown fences if the LLM added them anyway
+      if (replacement.startsWith('```')) {
+        const lines = replacement.split('\n');
+        lines.shift();
+        if (lines.length > 0 && lines[lines.length - 1].trim() === '```') lines.pop();
+        replacement = lines.join('\n');
+      }
+
+      if (!replacement) {
+        vscode.window.showInformationMessage('Inline Chat: no response from model');
+        return;
+      }
+
+      // Show diff preview
+      const originalText = editor.document.getText(targetRange);
+      const guessedLang = lang;
+      const originalDoc = await vscode.workspace.openTextDocument({ content: originalText, language: guessedLang });
+      const proposedDoc = await vscode.workspace.openTextDocument({ content: replacement, language: guessedLang });
+      await vscode.commands.executeCommand('vscode.diff', originalDoc.uri, proposedDoc.uri, 'Inline Chat: ' + instruction.slice(0, 40), { preview: true, viewColumn: vscode.ViewColumn.Beside });
+
+      const decision = await vscode.window.showInformationMessage(
+        'Inline Chat — Apply changes?', 'Apply', 'Discard'
+      );
+      if (decision === 'Apply') {
+        const edit = new vscode.WorkspaceEdit();
+        edit.replace(editor.document.uri, targetRange, replacement);
+        const ok = await vscode.workspace.applyEdit(edit);
+        if (ok) {
+          try { await vscode.commands.executeCommand('editor.action.formatDocument'); } catch {}
+          vscode.window.showInformationMessage('Inline Chat: changes applied');
+        }
+      }
+    } catch (err) {
+      vscode.window.showErrorMessage('Inline Chat error: ' + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      statusItem.dispose();
+    }
+  }));
+
   context.subscriptions.push(vscode.commands.registerCommand('copilot-local.debugError', async () => {
     const editor = vscode.window.activeTextEditor;
     const selected = editor?.document.getText(editor.selection.isEmpty ? undefined : editor.selection)?.trim() || '';
@@ -4329,6 +4553,95 @@ function activate(context) {
     refreshProfileStatus();
     await publishProfileToPanel();
     await saveSessionState(loadChatHistory());
+  }));
+
+  // ── Terminal Error Detection ──
+  // Track last terminal output for error detection
+  let lastTerminalOutput = '';
+  let lastTerminalExitCode = null;
+
+  // Use Shell Integration API if available (VS Code 1.93+)
+  if (vscode.window.onDidEndTerminalShellExecution) {
+    context.subscriptions.push(vscode.window.onDidEndTerminalShellExecution(async (event) => {
+      const exitCode = event.exitCode;
+      if (exitCode === 0) return; // Success — no action needed
+
+      lastTerminalExitCode = exitCode;
+
+      // Read output from the shell execution stream if available
+      let errOutput = '';
+      if (event.execution?.read) {
+        try {
+          for await (const data of event.execution.read()) {
+            errOutput += data;
+            if (errOutput.length > 8000) break;
+          }
+        } catch {}
+      }
+      lastTerminalOutput = errOutput;
+
+      // Show notification offering to fix
+      const action = await vscode.window.showWarningMessage(
+        'Terminal command failed (exit code ' + exitCode + '). Analyze with Copilot?',
+        'Fix Error', 'Dismiss'
+      );
+      if (action === 'Fix Error') {
+        await vscode.commands.executeCommand('copilot-local.fixTerminalError');
+      }
+    }));
+  }
+
+  context.subscriptions.push(vscode.commands.registerCommand('copilot-local.fixTerminalError', async () => {
+    // Gather terminal output from: last tracked output, clipboard, or user input
+    let errorText = lastTerminalOutput;
+
+    if (!errorText || errorText.trim().length < 10) {
+      // Fallback: try clipboard
+      try {
+        const clip = await vscode.env.clipboard.readText();
+        if (clip && clip.trim().length > 10) errorText = clip;
+      } catch {}
+    }
+
+    if (!errorText || errorText.trim().length < 10) {
+      // Fallback: ask user to paste
+      errorText = await vscode.window.showInputBox({
+        title: 'Fix Terminal Error',
+        prompt: 'Paste the terminal error output to analyze',
+        ignoreFocusOut: true,
+      }) || '';
+    }
+
+    if (!errorText || errorText.trim().length < 5) {
+      vscode.window.showInformationMessage('No terminal error text to analyze');
+      return;
+    }
+
+    // Truncate if too large
+    if (errorText.length > 6000) errorText = errorText.slice(-6000);
+
+    try {
+      const result = await postJSON('/api/debug/error', { stack_trace: errorText });
+      const text = [
+        '## Terminal Error Analysis',
+        '',
+        '**Root cause:** ' + (result.root_cause || 'N/A'),
+        '',
+        '**Explanation:**',
+        result.explanation || 'N/A',
+        '',
+        '**Suggested fixes:**',
+        ...(Array.isArray(result.suggested_fixes) && result.suggested_fixes.length > 0 ? result.suggested_fixes.map((v) => '- ' + v) : ['- N/A']),
+        '',
+        '**Related files:**',
+        ...(Array.isArray(result.related_files) && result.related_files.length > 0 ? result.related_files.map((v) => '- ' + v) : ['- N/A']),
+      ].join('\n');
+
+      const wv = await focusChatAndGetWebview();
+      wv.postMessage({ type: 'externalResult', text });
+    } catch (err) {
+      vscode.window.showErrorMessage('Terminal error analysis failed: ' + (err instanceof Error ? err.message : String(err)));
+    }
   }));
 }
 
