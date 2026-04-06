@@ -17,20 +17,37 @@ export class CopilotChatViewProvider implements vscode.WebviewViewProvider {
     webviewView.webview.onDidReceiveMessage(async (msg) => {
       if (msg.type === 'sendPrompt') {
         const prompt = msg.prompt || '';
+        const mode = msg.mode || 'qa';
         let response = '';
+        let finished = false;
         try {
           const legacy = require(path.resolve(__dirname, '../extension.js'));
-          if (typeof legacy.requestChatCompletion === 'function') {
-            // Streaming: enviar tokens parciales
-            await legacy.requestChatCompletion(prompt, (token) => {
-              response += token;
-              webviewView.webview.postMessage({ type: 'chatStream', token });
-            });
+          // Preferir WebSocket, fallback HTTP, luego CLI
+          const onChunk = (token: string) => {
+            response += token;
+            webviewView.webview.postMessage({ type: 'chatStream', token });
+          };
+          const onDone = (err?: Error) => {
+            if (finished) return;
+            finished = true;
+            if (err) {
+              webviewView.webview.postMessage({ type: 'chatResponse', response: 'Error: ' + (err.message || String(err)) });
+            } else {
+              webviewView.webview.postMessage({ type: 'chatResponse', response });
+            }
+          };
+          if (typeof legacy.streamWS === 'function') {
+            legacy.streamWS(prompt, undefined, onChunk, onDone);
+          } else if (typeof legacy.streamHTTP === 'function') {
+            legacy.streamHTTP(prompt, undefined, onChunk, onDone);
+          } else if (typeof legacy.streamCLI === 'function') {
+            legacy.streamCLI(prompt, undefined, onChunk, onDone);
+          } else {
+            throw new Error('No hay método de streaming disponible');
           }
         } catch (err) {
-          response = 'Error: ' + (err?.message || String(err));
+          webviewView.webview.postMessage({ type: 'chatResponse', response: 'Error: ' + (err?.message || String(err)) });
         }
-        webviewView.webview.postMessage({ type: 'chatResponse', response });
       }
     });
   }

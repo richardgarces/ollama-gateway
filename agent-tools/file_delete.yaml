@@ -1,0 +1,5 @@
+name: file_delete
+description: Elimina un archivo del repositorio (dentro del directorio permitido).
+type: function
+parameters:
+  path: Ruta relativa al archivo a eliminar (dentro del repo)

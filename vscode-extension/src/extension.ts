@@ -156,6 +156,64 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         context.subscriptions.push(vscode.commands.registerCommand('copilot-local.resetQualityAlerts', async () => {
           vscode.window.showInformationMessage('Reset de alertas de calidad aún no implementado.');
         }));
+
+        // Explain Selection
+        context.subscriptions.push(vscode.commands.registerCommand('copilot-local.explainSelection', async () => {
+          const editor = vscode.window.activeTextEditor;
+          if (!editor) {
+            vscode.window.showWarningMessage('No hay editor activo.');
+            return;
+          }
+          const selection = editor.selection.isEmpty ? editor.document.getText() : editor.document.getText(editor.selection);
+          const prompt = `Explica este código:\n\n${selection}`;
+          await vscode.commands.executeCommand('copilot-local.openChat');
+          // Enviar prompt al chatView
+          const chatView = (vscode.window as any).activeWebviewPanel || undefined;
+          if (chatView && chatView.webview) {
+            chatView.webview.postMessage({ type: 'sendPrompt', prompt });
+            vscode.window.showInformationMessage('Explicación enviada al chat.');
+          } else {
+            vscode.window.showInformationMessage('Explicación: ' + prompt);
+          }
+        }));
+
+        // Refactor Selection
+        context.subscriptions.push(vscode.commands.registerCommand('copilot-local.refactorSelection', async () => {
+          const editor = vscode.window.activeTextEditor;
+          if (!editor) {
+            vscode.window.showWarningMessage('No hay editor activo.');
+            return;
+          }
+          const selection = editor.selection.isEmpty ? editor.document.getText() : editor.document.getText(editor.selection);
+          const prompt = `Refactoriza este código para mayor claridad y mantenibilidad:\n\n${selection}`;
+          await vscode.commands.executeCommand('copilot-local.openChat');
+          const chatView = (vscode.window as any).activeWebviewPanel || undefined;
+          if (chatView && chatView.webview) {
+            chatView.webview.postMessage({ type: 'sendPrompt', prompt });
+            vscode.window.showInformationMessage('Refactorización enviada al chat.');
+          } else {
+            vscode.window.showInformationMessage('Refactorización: ' + prompt);
+          }
+        }));
+
+        // Add Tests
+        context.subscriptions.push(vscode.commands.registerCommand('copilot-local.addTests', async () => {
+          const editor = vscode.window.activeTextEditor;
+          if (!editor) {
+            vscode.window.showWarningMessage('No hay editor activo.');
+            return;
+          }
+          const selection = editor.selection.isEmpty ? editor.document.getText() : editor.document.getText(editor.selection);
+          const prompt = `Genera tests robustos para este código:\n\n${selection}`;
+          await vscode.commands.executeCommand('copilot-local.openChat');
+          const chatView = (vscode.window as any).activeWebviewPanel || undefined;
+          if (chatView && chatView.webview) {
+            chatView.webview.postMessage({ type: 'sendPrompt', prompt });
+            vscode.window.showInformationMessage('Generación de tests enviada al chat.');
+          } else {
+            vscode.window.showInformationMessage('Tests: ' + prompt);
+          }
+        }));
       // Integración nativa con API de Chat VS Code
       if ((vscode as any).chat && typeof (vscode as any).chat.createChatParticipant === 'function') {
         const handler = async (request: any, _ctx: any, stream: any, _token: any) => {

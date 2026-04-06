@@ -119,10 +119,10 @@ cat_conectividad() {
   echo -e "${DIM}    Verifica que cada backend responde en su puerto${NC}"
   echo ""
   check "Ollama corriendo (proceso independiente)" \
-    "pgrep -x ollama >/dev/null 2>&1 && echo 'running' || curl -sf -m 2 http://localhost:11434/ >/dev/null 2>&1 && echo 'running'" "running"
+    "pgrep -x ollama >/dev/null 2>&1 && echo 'running' || curl -sf -m 2 http://192.168.1.198:11434/ >/dev/null 2>&1 && echo 'running'" "running"
 
   check "Ollama responde (HTTP :11434)" \
-    "curl -sf -m 5 -o /dev/null -w '%{http_code}' http://localhost:11434/" "200"
+    "curl -sf -m 5 -o /dev/null -w '%{http_code}' http://192.168.1.198:11434/" "200"
 
   check "Qdrant responde (HTTP :6333)" \
     "curl -sf -m 5 -o /dev/null -w '%{http_code}' http://localhost:6333/"  "200"
@@ -185,7 +185,7 @@ cat_modelos() {
   echo ""
 
   local models model_count
-  models=$(curl -sf -m 5 http://localhost:11434/api/tags 2>/dev/null | jq -r '.models[].name' 2>/dev/null) || models=""
+  models=$(curl -sf -m 5 http://192.168.1.198:11434/api/tags 2>/dev/null | jq -r '.models[].name' 2>/dev/null) || models=""
   model_count=$(echo "$models" | grep -c '.' 2>/dev/null) || model_count=0
 
   printf "  %-55s" "Modelos instalados en Ollama"
@@ -199,7 +199,7 @@ cat_modelos() {
   fi
 
   check "Modelo de embeddings (nomic-embed-text:latest)" \
-    "curl -sf -m 5 http://localhost:11434/api/tags | jq -r '.models[].name' | grep -c nomic-embed-text:latest" "1"
+    "curl -sf -m 5 http://192.168.1.198:11434/api/tags | jq -r '.models[].name' | grep -c nomic-embed-text:latest" "1"
 }
 
 cat_auth() {
@@ -232,13 +232,13 @@ cat_inferencia() {
 
   # Auto-detectar un modelo de chat (excluir embeddings)
   local chat_model
-  chat_model=$(curl -sf -m 5 http://localhost:11434/api/tags 2>/dev/null \
+  chat_model=$(curl -sf -m 5 http://192.168.1.198:11434/api/tags 2>/dev/null \
     | jq -r '[.models[].name | select(test("embed|bge|e5-") | not)][0] // empty' 2>/dev/null) || chat_model=""
 
   if [ -z "$chat_model" ]; then
     printf "  %-55s" "Modelo de chat disponible"
     printf "${RED}❌ No hay modelo de chat${NC}\n"
-    echo -e "    ${RED}💡 Descargar uno: curl http://localhost:11434/api/pull -d '{\"name\":\"phi3:latest\"}'${NC}"
+    echo -e "    ${RED}💡 Descargar uno: curl http://192.168.1.198:11434/api/pull -d '{\"name\":\"phi3:latest\"}'${NC}"
     ((FAIL++))
     return
   fi
@@ -265,7 +265,7 @@ cat_inferencia() {
     ((PASS++))
   else
     printf "${RED}❌ FALLÓ${NC}\n"
-    echo -e "    ${RED}💡 ¿API corriendo? ¿Ollama respondiendo? Probar directo: curl http://localhost:11434/api/generate -d '{\"model\":\"$chat_model\",\"prompt\":\"hola\"}'${NC}"
+    echo -e "    ${RED}💡 ¿API corriendo? ¿Ollama respondiendo? Probar directo: curl http://192.168.1.198:11434/api/generate -d '{\"model\":\"$chat_model\",\"prompt\":\"hola\"}'${NC}"
     ((FAIL++))
   fi
 }

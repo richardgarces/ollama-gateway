@@ -1,0 +1,6 @@
+name: file_create
+description: Crea un archivo nuevo en el repositorio (solo si no existe).
+type: function
+parameters:
+  path: Ruta relativa al archivo a crear (dentro del repo)
+  content: Contenido inicial del archivo

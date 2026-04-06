@@ -688,6 +688,7 @@ func (s *Server) setupRoutes() {
 	mux.HandleFunc("POST /complete", completeHandler.Complete)
 	mux.HandleFunc("POST /openai/v1/chat/completions", openaiHandler.ChatCompletions)
 	mux.HandleFunc("GET /ws/chat", wsHandler.Handle)
+	mux.HandleFunc("GET /openai/v1/chat/ws", openaiHandler.ChatWebSocketHandler)
 
 	// Rutas protegidas con JWT
 	mux.Handle("POST /api/generate", authMiddleware.JWT(legacy(http.HandlerFunc(generateHandler.Handle), "/api/v2/generate")))

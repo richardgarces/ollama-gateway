@@ -1,0 +1,6 @@
+name: file_update
+description: Modifica el contenido de un archivo existente en el repositorio.
+type: function
+parameters:
+  path: Ruta relativa al archivo a modificar (dentro del repo)
+  content: Nuevo contenido del archivo

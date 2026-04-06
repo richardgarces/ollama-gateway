@@ -2,7 +2,7 @@
   "name": "copilot-local",
   "displayName": "Copilot Local",
   "description": "Local AI Copilot with sidebar chat, inline completions, RAG and streaming",
-  "version": "0.2.48",
+  "version": "0.2.52",
   "engines": {
     "vscode": "^1.60.0"
   },
