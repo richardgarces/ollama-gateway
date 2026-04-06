@@ -2,7 +2,7 @@
   "name": "copilot-local",
   "displayName": "Copilot Local",
   "description": "Local AI Copilot with sidebar chat, inline completions, RAG and streaming",
-  "version": "0.2.32",
+  "version": "0.2.48",
   "engines": {
     "vscode": "^1.60.0"
   },
@@ -43,15 +43,17 @@
   "scripts": {
     "precompile": "node scripts/bump-version.js",
     "compile": "tsc -p .",
+    "postcompile": "node scripts/copy-legacy-extension.js",
     "build": "npm run compile",
     "size:check": "node scripts/check-size.js"
   },
   "devDependencies": {
-    "typescript": "^5.8.3",
     "@types/node": "^22.15.17",
-    "@types/vscode": "^1.60.0"
+    "@types/vscode": "^1.60.0",
+    "typescript": "^5.8.3"
   },
   "dependencies": {
+    "node-fetch": "^2.7.0",
     "vscode-languageclient": "^9.0.1",
     "vscode-languageserver": "^9.0.1",
     "vscode-languageserver-textdocument": "^1.0.11"

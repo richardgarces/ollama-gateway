@@ -191,18 +191,7 @@ func (h *OpenAIHandler) ChatCompletions(w http.ResponseWriter, r *http.Request) 
 			httputil.WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		if err := httputil.WriteSSEData(w, map[string]interface{}{
-			"id":      id,
-			"object":  "chat.completion.chunk",
-			"created": created,
-			"model":   model,
-			"choices": []map[string]interface{}{{
-				"index": 0,
-				"delta": map[string]string{"role": "assistant", "content": ""},
-			}},
-		}); err != nil {
-			return
-		}
+		// OMITIR el chunk inicial vacío (role assistant, content "") para evitar cortar el stream en el cliente
 		streamChunk := func(chunk string) error {
 			assistantContent.WriteString(chunk)
 			return httputil.WriteSSEData(w, map[string]interface{}{

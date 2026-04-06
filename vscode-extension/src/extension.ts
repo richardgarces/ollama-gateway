@@ -42,6 +42,34 @@ function startLsp(context: vscode.ExtensionContext): void {
 }
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+          // Inline Completion (FIM) - ghost text
+          const enableInline = vscode.workspace.getConfiguration('copilotLocal').get('inlineCompletions', true);
+          if (enableInline && vscode.languages.registerInlineCompletionItemProvider) {
+            const langs = ['go', 'typescript', 'javascript', 'python', 'sql'];
+            for (const lang of langs) {
+              context.subscriptions.push(
+                vscode.languages.registerInlineCompletionItemProvider({ language: lang }, {
+                  async provideInlineCompletionItems(document, position, context_, token) {
+                    // Solicita completions al LSP
+                    const lsp = client;
+                    if (!lsp) return [];
+                    const res = await lsp.sendRequest('textDocument/completion', {
+                      textDocument: { uri: document.uri.toString() },
+                      position: position,
+                      context: context_,
+                    });
+                    if (!res || !Array.isArray(res)) return [];
+                    return res.map((item: any) => ({
+                      insertText: item.insertText || item.label,
+                      range: new vscode.Range(position, position),
+                      filterText: item.label,
+                      command: undefined,
+                    }));
+                  },
+                })
+              );
+            }
+          }
         // === Registro de comandos principales Copilot Local ===
         // 1. Send Selection
         context.subscriptions.push(vscode.commands.registerCommand('copilot-local.sendSelection', async () => {
