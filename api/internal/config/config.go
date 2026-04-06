@@ -109,7 +109,7 @@ func loadFromEnv() *Config {
 		OllamaURL:                getEnv("OLLAMA_URL", "http://ollama:11434"),
 		ChatModel:                getEnv("CHAT_MODEL", "local-rag"),
 		FIMModel:                 getEnv("FIM_MODEL", "local-rag"),
-		EmbeddingModel:           getEnv("EMBEDDING_MODEL", "nomic-embed-text"),
+		EmbeddingModel:           getEnv("EMBEDDING_MODEL", "nomic-embed-text:latest"),
 		OllamaKeepAlive:          getEnv("OLLAMA_KEEP_ALIVE", "-1"),
 		AutoQuantizeModels:       getEnvAsBool("AUTO_QUANTIZE_MODELS", true),
 		QdrantURL:                getEnv("QDRANT_URL", "http://qdrant:6333"),

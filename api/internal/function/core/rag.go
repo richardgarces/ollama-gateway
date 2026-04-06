@@ -236,7 +236,7 @@ func (s *RAGService) search(query string) string {
 		defer s.poolObserver.ObservePoolRelease("retrieval")
 	}
 
-	embedding, err := s.ollamaService.GetEmbedding("nomic-embed-text", query)
+	embedding, err := s.ollamaService.GetEmbedding("nomic-embed-text:latest", query)
 	if err != nil || len(embedding) == 0 {
 		return ""
 	}

@@ -535,7 +535,7 @@ Espera a que termine de descargar (puede tardar varios minutos según tu conexi�
 ### 10.2 — Descargar modelo de embeddings (para RAG)
 
 ```bash
-curl http://localhost:11434/api/pull -d '{"name": "nomic-embed-text"}'
+curl http://localhost:11434/api/pull -d '{"name": "nomic-embed-text:latest"}'
 ```
 
 ### 10.3 — Verificar modelos instalados
@@ -825,7 +825,7 @@ curl -s http://localhost:8081/health/readiness | jq . # API + todos los backends
 
 # ===== DESCARGAR MODELOS =====
 curl http://localhost:11434/api/pull -d '{"name":"qwen2.5-coder:7b"}'
-curl http://localhost:11434/api/pull -d '{"name":"nomic-embed-text"}'
+curl http://localhost:11434/api/pull -d '{"name":"nomic-embed-text:latest"}'
 
 # ===== USAR =====
 TOKEN=$(curl -s -X POST http://localhost:8081/login -H "Content-Type: application/json" -d '{"username":"admin","password":"admin"}' | jq -r .token)

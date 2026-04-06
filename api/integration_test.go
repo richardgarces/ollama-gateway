@@ -143,7 +143,7 @@ func TestFullRAGPipeline(t *testing.T) {
 		t.Fatalf("IndexRepo() error = %v", err)
 	}
 
-	emb, err := ollama.GetEmbedding("nomic-embed-text", "sum function")
+	emb, err := ollama.GetEmbedding("nomic-embed-text:latest", "sum function")
 	if err != nil {
 		t.Fatalf("GetEmbedding() error = %v", err)
 	}

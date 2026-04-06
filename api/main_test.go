@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"ollama-gateway/internal/config"
 	agenttransport "ollama-gateway/internal/function/agent/transport"
@@ -54,6 +55,13 @@ func (f fakeOllamaService) Generate(model, prompt string) (string, error) {
 }
 
 func (f fakeOllamaService) StreamGenerate(model, prompt string, onChunk func(string) error) error {
+	if f.err != nil {
+		return f.err
+	}
+	return onChunk("")
+}
+
+func (f fakeOllamaService) StreamChat(model string, messages []domain.Message, onChunk func(string) error) error {
 	if f.err != nil {
 		return f.err
 	}
@@ -174,8 +182,8 @@ func TestWriteError(t *testing.T) {
 
 func TestMetricsCollector(t *testing.T) {
 	collector := observability.NewMetricsCollector()
-	collector.Observe(http.MethodGet, "/health", http.StatusOK, 10)
-	collector.Observe(http.MethodGet, "/health", http.StatusInternalServerError, 20)
+	collector.Observe(http.MethodGet, "/health", http.StatusOK, 10*time.Millisecond)
+	collector.Observe(http.MethodGet, "/health", http.StatusInternalServerError, 20*time.Millisecond)
 
 	snapshot := collector.Snapshot()
 	if snapshot.TotalRequests != 2 {

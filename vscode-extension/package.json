@@ -2,7 +2,7 @@
   "name": "copilot-local",
   "displayName": "Copilot Local",
   "description": "Local AI Copilot with sidebar chat, inline completions, RAG and streaming",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "engines": {
     "vscode": "^1.60.0"
   },
@@ -406,7 +406,7 @@
         },
         "copilotLocal.embeddingModel": {
           "type": "string",
-          "default": "nomic-embed-text",
+          "default": "nomic-embed-text:latest",
           "description": "Preferred embedding model name used by the gateway"
         },
         "copilotLocal.workspaceModel": {

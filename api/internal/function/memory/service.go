@@ -182,7 +182,7 @@ func (s *Service) SaveContext(ctx context.Context, in SaveContextInput) (*Memory
 	if event.Detail != "" {
 		embInput = embInput + "\n" + event.Detail
 	}
-	emb, err := s.ollama.GetEmbedding("nomic-embed-text", embInput)
+	emb, err := s.ollama.GetEmbedding("nomic-embed-text:latest", embInput)
 	if err != nil {
 		s.logger.Warn("embedding de memoria falló", slog.String("error", err.Error()))
 	} else {
@@ -218,7 +218,7 @@ func (s *Service) GetRelevantContext(ctx context.Context, query string, topK int
 		topK = 5
 	}
 
-	emb, err := s.ollama.GetEmbedding("nomic-embed-text", cleanQuery)
+	emb, err := s.ollama.GetEmbedding("nomic-embed-text:latest", cleanQuery)
 	if err != nil {
 		return nil, err
 	}

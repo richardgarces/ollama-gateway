@@ -73,7 +73,9 @@ func (s *AutopilotService) RunStream(ctx context.Context, task, model string, ws
 		"- list_workspace (workspace): lista los archivos del workspace del usuario. No requiere args.\n" +
 		"- read_workspace_file (workspace): lee un archivo del workspace. Args: {\"path\": \"relative/path\"}\n" +
 		"- create_file (workspace): crea un archivo nuevo en el workspace. Args: {\"path\": \"relative/path\", \"content\": \"contenido completo del archivo\"}\n" +
-		"- modify_file (workspace): modifica un archivo existente en el workspace. Args: {\"path\": \"relative/path\", \"content\": \"contenido nuevo completo del archivo\"}"
+		"- modify_file (workspace): modifica un archivo existente en el workspace. Args: {\"path\": \"relative/path\", \"content\": \"contenido nuevo completo del archivo\"}\n" +
+		"- delete_file (workspace): elimina un archivo del workspace. Args: {\"path\": \"relative/path\"}\n" +
+		"- run_command (workspace): ejecuta un comando en la terminal del workspace (git, npm, go, etc). Args: {\"command\": \"comando a ejecutar\"}"
 
 	// If workspace context has files, mention them
 	wsInfo := ""
@@ -103,7 +105,9 @@ func (s *AutopilotService) RunStream(ctx context.Context, task, model string, ws
 		"3. Para dar la respuesta final: {\"action\":\"answer\",\"response\":\"tu respuesta completa\",\"thought\":\"resumen\"}\n" +
 		"4. Analiza los resultados de herramientas anteriores antes de decidir el siguiente paso.\n" +
 		"5. Para crear o modificar archivos, usa create_file o modify_file con el contenido COMPLETO del archivo.\n" +
-		"6. Máximo " + fmt.Sprintf("%d", maxAutopilotIterations) + " iteraciones." +
+		"6. Para eliminar archivos, usa delete_file.\n" +
+		"7. Para ejecutar comandos del sistema (git, npm, go build, etc.), usa run_command.\n" +
+		"8. Máximo " + fmt.Sprintf("%d", maxAutopilotIterations) + " iteraciones." +
 		wsInfo
 
 	if model == "" {
@@ -254,6 +258,44 @@ func (s *AutopilotService) RunStream(ctx context.Context, task, model string, ws
 			})
 			onEvent(AutopilotEvent{Event: "tool_result", Iteration: i, Tool: "modify_file", Success: &t, Output: "Cambios propuestos para: " + path + " (pendiente de aceptación del usuario)"})
 			history = append(history, fmt.Sprintf("PASO %d: modify_file(%s) → propuesto al usuario", i, path))
+			continue
+
+		case "delete_file":
+			path := args["path"]
+			if path == "" {
+				f := false
+				onEvent(AutopilotEvent{Event: "tool_result", Iteration: i, Tool: "delete_file", Success: &f, Output: "path es requerido"})
+				history = append(history, fmt.Sprintf("PASO %d: delete_file → falta path", i))
+				continue
+			}
+			t := true
+			onEvent(AutopilotEvent{
+				Event:     "file_delete",
+				Iteration: i,
+				Tool:      "delete_file",
+				FilePath:  path,
+			})
+			onEvent(AutopilotEvent{Event: "tool_result", Iteration: i, Tool: "delete_file", Success: &t, Output: "Eliminación propuesta: " + path + " (pendiente de aceptación del usuario)"})
+			history = append(history, fmt.Sprintf("PASO %d: delete_file(%s) → propuesto al usuario", i, path))
+			continue
+
+		case "run_command":
+			cmd := args["command"]
+			if cmd == "" {
+				f := false
+				onEvent(AutopilotEvent{Event: "tool_result", Iteration: i, Tool: "run_command", Success: &f, Output: "command es requerido"})
+				history = append(history, fmt.Sprintf("PASO %d: run_command → falta command", i))
+				continue
+			}
+			t := true
+			onEvent(AutopilotEvent{
+				Event:       "run_command",
+				Iteration:   i,
+				Tool:        "run_command",
+				FileContent: cmd,
+			})
+			onEvent(AutopilotEvent{Event: "tool_result", Iteration: i, Tool: "run_command", Success: &t, Output: "Comando propuesto: " + cmd + " (pendiente de aceptación del usuario)"})
+			history = append(history, fmt.Sprintf("PASO %d: run_command(%s) → propuesto al usuario", i, cmd))
 			continue
 		}
 

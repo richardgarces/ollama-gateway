@@ -164,7 +164,7 @@ func GetRouteDefinitions() []RouteDefinition {
 		{Method: "POST", Path: "/api/search", Description: "(Legacy) Busqueda semantica; responde con headers de deprecación", ExampleBody: "{\n  \"query\": \"auth middleware\",\n  \"top\": 5\n}", Protected: false},
 		{Method: "POST", Path: "/api/v1/search", Description: "Busqueda semantica (v1)", ExampleBody: "{\n  \"query\": \"auth middleware\",\n  \"top\": 5\n}", Protected: false},
 		{Method: "POST", Path: "/api/v2/search", Description: "Busqueda semantica (v2, acepta aliases top_k/k)", ExampleBody: "{\n  \"query\": \"auth middleware\",\n  \"top\": 5\n}", Protected: false},
-		{Method: "POST", Path: "/openai/v1/embeddings", Description: "OpenAI compatible embeddings", ExampleBody: "{\n  \"model\": \"nomic-embed-text\",\n  \"input\": \"hola\"\n}", Protected: false},
+		{Method: "POST", Path: "/openai/v1/embeddings", Description: "OpenAI compatible embeddings", ExampleBody: "{\n  \"model\": \"nomic-embed-text:latest\",\n  \"input\": \"hola\"\n}", Protected: false},
 		{Method: "POST", Path: "/openai/v1/completions", Description: "OpenAI compatible completions", ExampleBody: "{\n  \"model\": \"llama3\",\n  \"prompt\": \"Hello\"\n}", Protected: false},
 		{Method: "POST", Path: "/complete", Description: "Code completion FIM with cursor context (<PRE><SUF><MID>)", ExampleBody: "{\n  \"model\": \"qwen2.5-coder\",\n  \"prefix\": \"func main() {\\n\",\n  \"suffix\": \"\\n}\",\n  \"language\": \"go\"\n}", Protected: false},
 		{Method: "POST", Path: "/openai/v1/chat/completions", Description: "OpenAI compatible chat completions", ExampleBody: "{\n  \"model\": \"llama3\",\n  \"messages\": [{\"role\":\"user\",\"content\":\"hola\"}]\n}", Protected: false},
@@ -658,12 +658,12 @@ func (s *Server) setupRoutes() {
 		http.Error(w, `{"error":"api spec no encontrada"}`, http.StatusNotFound)
 	})
 
-	// Indexer control (internal, solo localhost)
-	mux.Handle("GET /internal/index/status", localhostOnly(authMiddleware.JWT(scopeGate("indexer:control", http.HandlerFunc(indexerHandler.Status)))))
-	mux.Handle("POST /internal/index/reindex", localhostOnly(authMiddleware.JWT(scopeGate("indexer:control", http.HandlerFunc(indexerHandler.Reindex)))))
-	mux.Handle("POST /internal/index/start", localhostOnly(authMiddleware.JWT(scopeGate("indexer:control", http.HandlerFunc(indexerHandler.StartWatcher)))))
-	mux.Handle("POST /internal/index/stop", localhostOnly(authMiddleware.JWT(scopeGate("indexer:control", http.HandlerFunc(indexerHandler.StopWatcher)))))
-	mux.Handle("POST /internal/index/reset", localhostOnly(authMiddleware.JWT(scopeGate("indexer:control", http.HandlerFunc(indexerHandler.ResetState)))))
+	// Indexer control (internal, solo localhost — sin JWT, protegido por localhostOnly)
+	mux.Handle("GET /internal/index/status", localhostOnly(http.HandlerFunc(indexerHandler.Status)))
+	mux.Handle("POST /internal/index/reindex", localhostOnly(http.HandlerFunc(indexerHandler.Reindex)))
+	mux.Handle("POST /internal/index/start", localhostOnly(http.HandlerFunc(indexerHandler.StartWatcher)))
+	mux.Handle("POST /internal/index/stop", localhostOnly(http.HandlerFunc(indexerHandler.StopWatcher)))
+	mux.Handle("POST /internal/index/reset", localhostOnly(http.HandlerFunc(indexerHandler.ResetState)))
 	mux.Handle("POST /api/search", legacy(http.HandlerFunc(searchHandler.Handle), "/api/v2/search"))
 	mux.HandleFunc("POST /api/v1/search", searchHandler.Handle)
 	mux.Handle("POST /api/v2/search", v2Search)

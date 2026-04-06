@@ -100,6 +100,50 @@ function getConfig() {
 }
 
 let promptRCText = '';
+let cachedJwtToken = '';
+
+/**
+ * Ensures a valid JWT token is available for authenticated endpoints.
+ * If copilotLocal.jwtToken is configured, uses that.
+ * Otherwise, performs auto-login to /login with default credentials.
+ * Returns the token string or '' if unable to obtain one.
+ */
+async function ensureJwtToken() {
+  const cfg = getConfig();
+  if (cfg.jwtToken) return cfg.jwtToken;
+  if (cachedJwtToken) return cachedJwtToken;
+
+  const apiUrl = cfg.apiUrl;
+  const loginUrl = new URL(apiUrl + '/login');
+  const lib = loginUrl.protocol === 'https:' ? https : http;
+
+  return new Promise((resolve) => {
+    const body = JSON.stringify({ username: 'admin', password: 'admin' });
+    const req = lib.request(loginUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+      timeout: 5000,
+    }, (res) => {
+      let raw = '';
+      res.on('data', (chunk) => { raw += chunk.toString(); });
+      res.on('end', () => {
+        try {
+          const data = JSON.parse(raw);
+          if (data.token) {
+            cachedJwtToken = data.token;
+            resolve(data.token);
+            return;
+          }
+        } catch {}
+        resolve('');
+      });
+    });
+    req.on('error', () => resolve(''));
+    req.on('timeout', () => { req.destroy(); resolve(''); });
+    req.write(body);
+    req.end();
+  });
+}
 
 function loadPromptRC() {
   const folder = vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath;
@@ -277,18 +321,18 @@ function safeJSONParse(raw) {
 }
 
 function requestJSON(method, endpoint, payload, abortSignal) {
-  const { apiUrl, jwtToken } = getConfig();
+  const { apiUrl } = getConfig();
   const url = new URL(apiUrl + endpoint);
   const lib = url.protocol === 'https:' ? https : http;
   const body = payload ? JSON.stringify(payload) : '';
-  const headers = {};
-  if (body) {
-    headers['Content-Type'] = 'application/json';
-    headers['Content-Length'] = Buffer.byteLength(body);
-  }
-  if (jwtToken) headers['Authorization'] = 'Bearer ' + jwtToken;
 
-  return new Promise((resolve, reject) => {
+  return ensureJwtToken().then((token) => new Promise((resolve, reject) => {
+    const headers = {};
+    if (body) {
+      headers['Content-Type'] = 'application/json';
+      headers['Content-Length'] = Buffer.byteLength(body);
+    }
+    if (token) headers['Authorization'] = 'Bearer ' + token;
     const req = lib.request(url, { method, headers }, (res) => {
       let raw = '';
       res.on('data', (chunk) => { raw += chunk.toString(); });
@@ -316,7 +360,7 @@ function requestJSON(method, endpoint, payload, abortSignal) {
     }
     if (body) req.write(body);
     req.end();
-  });
+  }));
 }
 
 function postJSON(endpoint, payload) {
@@ -363,7 +407,7 @@ async function requestChatCompletion(prompt, model, metrics) {
 }
 
 function streamAgentAutopilot(task, model, wsContext, onEvent, onDone) {
-  const { apiUrl, jwtToken } = getConfig();
+  const { apiUrl } = getConfig();
   const url = new URL(apiUrl + '/api/agent/autopilot');
   const lib = url.protocol === 'https:' ? https : http;
   let finished = false;
@@ -375,20 +419,27 @@ function streamAgentAutopilot(task, model, wsContext, onEvent, onDone) {
   };
 
   const body = JSON.stringify({ task, model: model || '', context: wsContext || {} });
-  const headers = { 'Content-Type': 'application/json' };
-  if (jwtToken) headers['Authorization'] = 'Bearer ' + jwtToken;
 
-  const req = lib.request(url, { method: 'POST', headers }, (res) => {
-    let buf = '';
-    res.on('data', (raw) => {
-      buf += raw.toString();
-      const lines = buf.split('\n');
-      buf = lines.pop() || '';
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed || !trimmed.startsWith('data:')) continue;
-        const payload = trimmed.slice(5).trim();
-        if (payload === '[DONE]') { finish(); return; }
+  ensureJwtToken().then((token) => {
+    const headers = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = 'Bearer ' + token;
+
+    const req = lib.request(url, { method: 'POST', headers }, (res) => {
+      if (res.statusCode === 401) {
+        cachedJwtToken = '';
+        finish(new Error('No autorizado (401). Configura copilotLocal.jwtToken o revisa las credenciales.'));
+        return;
+      }
+      let buf = '';
+      res.on('data', (raw) => {
+        buf += raw.toString();
+        const lines = buf.split('\n');
+        buf = lines.pop() || '';
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed || !trimmed.startsWith('data:')) continue;
+          const payload = trimmed.slice(5).trim();
+          if (payload === '[DONE]') { finish(); return; }
         try {
           const ev = JSON.parse(payload);
           if (ev && ev.event) onEvent(ev);
@@ -399,9 +450,10 @@ function streamAgentAutopilot(task, model, wsContext, onEvent, onDone) {
     res.on('error', (e) => finish(e));
   });
 
-  req.on('error', (e) => finish(e));
-  req.write(body);
-  req.end();
+    req.on('error', (e) => finish(e));
+    req.write(body);
+    req.end();
+  }).catch((e) => finish(e));
 }
 
 function streamHTTP(prompt, model, onChunk, onDone, abortCtl, metrics) {
@@ -849,7 +901,7 @@ function renderMarkdownWithCode(text) {
     out += '<span>' + sanitizeHTML(src.slice(i, m.index)).replace(/\\n/g, '<br>') + '</span>';
     const lang = sanitizeHTML(m[1] || 'plaintext');
     const code = sanitizeHTML(m[2] || '');
-    out += '<pre><div class="code-actions"><button data-copy="1">Copy</button><button data-apply="1" data-lang="' + lang + '">Apply</button></div><code class="language-' + lang + '">' + code + '</code></pre>';
+    out += '<pre><div class="code-actions"><button data-copy="1">Copy</button><button data-apply="1" data-lang="' + lang + '">Apply</button><button data-insert-file="1" data-lang="' + lang + '">Insert to file</button></div><code class="language-' + lang + '">' + code + '</code></pre>';
     i = m.index + m[0].length;
   }
   out += '<span>' + sanitizeHTML(src.slice(i)).replace(/\\n/g, '<br>') + '</span>';
@@ -882,7 +934,7 @@ function renderCodeOnly(text) {
   blocks.forEach((b) => {
     const lang = sanitizeHTML(b.lang || 'plaintext');
     const code = sanitizeHTML(b.code || '');
-    out += '<pre><div class="code-actions"><button data-copy="1">Copy</button><button data-apply="1" data-lang="' + lang + '">Apply</button></div><code class="language-' + lang + '">' + code + '</code></pre>';
+    out += '<pre><div class="code-actions"><button data-copy="1">Copy</button><button data-apply="1" data-lang="' + lang + '">Apply</button><button data-insert-file="1" data-lang="' + lang + '">Insert to file</button></div><code class="language-' + lang + '">' + code + '</code></pre>';
   });
   return out;
 }
@@ -903,6 +955,13 @@ function attachCodeActions(root) {
       const code = btn.closest('pre')?.querySelector('code')?.innerText || '';
       const lang = btn.getAttribute('data-lang') || '';
       vscode.postMessage({ type: 'apply', code, lang });
+    });
+  });
+  root.querySelectorAll('button[data-insert-file]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const code = btn.closest('pre')?.querySelector('code')?.innerText || '';
+      const lang = btn.getAttribute('data-lang') || '';
+      vscode.postMessage({ type: 'insertToFile', code, lang });
     });
   });
 }
@@ -1126,7 +1185,7 @@ function sendNow(text) {
     const task = text.replace(/^\\/agent\\s*/i, '').trim();
     if (!task) { addMessage('assistant', 'Uso: /agent <descripción de la tarea>'); sendBtn.disabled = false; return; }
     addMessage('assistant', '🤖 Agent Autopilot ejecutando...');
-    vscode.postMessage({ type: 'agentChat', task, model: modelsEl.value || '' });
+    vscode.postMessage({ type: 'agentChat', task, model: modelsEl.value || '', contextFiles: [] });
   } else {
     startAssistant();
     vscode.postMessage({ type: 'chat', text, model: modelsEl.value || '' });
@@ -1507,6 +1566,19 @@ button.secondary { background: var(--vscode-button-secondaryBackground); color: 
 #addFileBtn { background: none; border: 1px solid var(--border); color: var(--muted); border-radius: 4px; padding: 2px 8px; cursor: pointer; font-size: 11px; white-space: nowrap; }
 #addFileBtn:hover { color: var(--fg); border-color: var(--accent); }
 
+/* ── Mode Selector ── */
+#modeSelector { display: flex; gap: 0; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; margin: 0 10px 6px; font-size: 11px; }
+#modeSelector button { flex: 1; padding: 4px 10px; border: none; cursor: pointer; background: transparent; color: var(--muted); font-size: 11px; font-weight: 500; transition: all 0.15s; white-space: nowrap; }
+#modeSelector button:hover { color: var(--fg); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+#modeSelector button.active { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); font-weight: 600; }
+.agent-cmd-op { background: color-mix(in srgb, var(--vscode-terminal-ansiYellow, #e2c04b) 10%, transparent); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; margin: 6px 0; }
+.agent-cmd-op code { font-family: var(--vscode-editor-font-family, monospace); font-size: 11px; background: var(--code-bg); padding: 2px 6px; border-radius: 3px; }
+.agent-cmd-output { font-family: var(--vscode-editor-font-family, monospace); font-size: 10px; max-height: 150px; overflow-y: auto; margin-top: 4px; padding: 4px; background: var(--code-bg); border-radius: 3px; white-space: pre-wrap; word-break: break-all; }
+.agent-cmd-code { margin: 6px 0 4px; background: var(--code-bg); border-radius: 4px; }
+.agent-cmd-code code { display: block; padding: 6px 8px; white-space: pre-wrap; word-break: break-all; font-size: 11px; }
+button[data-insert-file] { background: color-mix(in srgb, var(--vscode-terminal-ansiGreen, #89d185) 20%, transparent); color: var(--fg); border: 1px solid color-mix(in srgb, var(--vscode-terminal-ansiGreen) 40%, transparent); }
+button[data-insert-file]:hover { background: color-mix(in srgb, var(--vscode-terminal-ansiGreen, #89d185) 35%, transparent); }
+
 @keyframes historyPulse {
   0% { background: color-mix(in srgb, var(--accent) 24%, transparent); }
   100% { background: transparent; }
@@ -1557,6 +1629,11 @@ button.secondary { background: var(--vscode-button-secondaryBackground); color: 
 
 <div id="contextChips"></div>
 
+<div id="modeSelector">
+  <button id="modeAsk" class="active" title="Pregunta/Respuesta con sugerencias de código">💬 Ask</button>
+  <button id="modeAgent" title="Agente autónomo: crea, modifica, elimina archivos y ejecuta comandos">🤖 Agent</button>
+</div>
+
 <div id="inputArea">
   <div id="slashPopup"></div>
   <div id="inputRow">
@@ -1600,7 +1677,10 @@ const sessionBannerEl = document.getElementById('sessionBanner');
 const slashPopupEl = document.getElementById('slashPopup');
 const contextChipsEl = document.getElementById('contextChips');
 const addFileBtnEl = document.getElementById('addFileBtn');
+const modeAskBtn = document.getElementById('modeAsk');
+const modeAgentBtn = document.getElementById('modeAgent');
 const voiceEnabled = ${voiceInputEnabled ? 'true' : 'false'};
+let currentMode = 'ask'; // 'ask' | 'agent'
 let pending = null;
 const chatHistory = [];
 let recognition = null;
@@ -1686,6 +1766,13 @@ function attachCodeActions(root) {
       const code = btn.closest('pre')?.querySelector('code')?.innerText || '';
       const lang = btn.getAttribute('data-lang') || '';
       vscode.postMessage({ type: 'apply', code, lang });
+    });
+  });
+  root.querySelectorAll('button[data-insert-file]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const code = btn.closest('pre')?.querySelector('code')?.innerText || '';
+      const lang = btn.getAttribute('data-lang') || '';
+      vscode.postMessage({ type: 'insertToFile', code, lang });
     });
   });
 }
@@ -1949,8 +2036,8 @@ let fileOpCounter = 0;
 function addAgentFileOp(type, iteration, filePath, opId) {
   if (!agentStepsContainer) return null;
   if (!opId) opId = 'fileop-' + (++fileOpCounter);
-  const icon = type === 'create' ? '🆕' : '✏️';
-  const label = type === 'create' ? 'Crear archivo' : 'Modificar archivo';
+  const icon = type === 'create' ? '🆕' : type === 'delete' ? '🗑️' : '✏️';
+  const label = type === 'create' ? 'Crear archivo' : type === 'delete' ? 'Eliminar archivo' : 'Modificar archivo';
   const step = document.createElement('div');
   step.className = 'agent-step';
   step.innerHTML =
@@ -1988,6 +2075,56 @@ function updateFileOpStatus(opId, status, text) {
   }
   if (statusEl) { statusEl.textContent = text; statusEl.className = 'agent-file-op-status ' + status; }
   if (actionsEl) actionsEl.remove();
+}
+
+let cmdOpCounter = 0;
+function addAgentCmdOp(iteration, command, opId) {
+  if (!agentStepsContainer) return null;
+  if (!opId) opId = 'cmdop-' + (++cmdOpCounter);
+  const step = document.createElement('div');
+  step.className = 'agent-step';
+  step.innerHTML =
+    '<div class="agent-step-header"><span class="agent-step-icon">⚡</span><span class="agent-step-label">Paso ' + iteration + ': Ejecutar comando</span><span class="agent-step-badge running">pendiente</span></div>' +
+    '<div class="agent-step-body open">' +
+      '<div class="agent-cmd-op" id="' + opId + '">' +
+        '<div class="agent-file-op-header"><span class="icon">⚡</span><span>Comando del sistema</span></div>' +
+        '<pre class="agent-cmd-code"><code>' + sanitizeHTML(command) + '</code></pre>' +
+        '<div class="agent-file-op-actions">' +
+          '<button class="accept-btn" data-opid="' + opId + '" data-action="accept">▶ Ejecutar</button>' +
+          '<button class="reject-btn" data-opid="' + opId + '" data-action="reject">✗ Rechazar</button>' +
+        '</div>' +
+        '<div class="agent-cmd-output" id="' + opId + '-output" style="display:none;"></div>' +
+        '<div class="agent-file-op-status" id="' + opId + '-status"></div>' +
+      '</div>' +
+    '</div>';
+  agentStepsContainer.appendChild(step);
+  step.querySelector('.accept-btn').addEventListener('click', (e) => {
+    vscode.postMessage({ type: 'acceptCommand', opId });
+  });
+  step.querySelector('.reject-btn').addEventListener('click', (e) => {
+    vscode.postMessage({ type: 'rejectCommand', opId });
+    updateCmdOpStatus(opId, 'rejected', 'Comando rechazado');
+  });
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+  return opId;
+}
+
+function updateCmdOpStatus(opId, status, text) {
+  const badge = document.querySelector('#' + opId)?.closest('.agent-step')?.querySelector('.agent-step-badge');
+  const statusEl = document.getElementById(opId + '-status');
+  const outputEl = document.getElementById(opId + '-output');
+  const actionsEl = document.querySelector('#' + opId + ' .agent-file-op-actions');
+  if (badge) {
+    badge.textContent = status === 'accepted' ? 'ejecutado' : status === 'running' ? 'ejecutando...' : 'rechazado';
+    badge.className = 'agent-step-badge ' + (status === 'accepted' ? 'success' : status === 'running' ? 'running' : 'error');
+  }
+  if (statusEl) { statusEl.textContent = text; statusEl.className = 'agent-file-op-status ' + status; }
+  if (actionsEl && status !== 'running') actionsEl.remove();
+}
+
+function showCmdOutput(opId, output) {
+  const el = document.getElementById(opId + '-output');
+  if (el) { el.style.display = 'block'; el.textContent = output; }
 }
 
 function resetHistoryUI() {
@@ -2028,9 +2165,12 @@ function sendNow(text) {
   sendBtn.disabled = true;
   sendBtn.style.display = 'none';
   stopBtn.style.display = 'flex';
-  if (text.trim().toLowerCase().startsWith('/agent')) {
-    const task = text.replace(/^\\/agent\\s*/i, '').trim();
-    if (!task) { addMessage('assistant', 'Uso: /agent <descripción de la tarea>'); sendBtn.disabled = false; sendBtn.style.display = 'flex'; stopBtn.style.display = 'none'; return; }
+  // Explicit /agent prefix always goes to agent mode
+  const forceAgent = text.trim().toLowerCase().startsWith('/agent');
+  const useAgent = currentMode === 'agent' || forceAgent;
+  if (useAgent) {
+    const task = forceAgent ? text.replace(/^\\/agent\\s*/i, '').trim() : text.trim();
+    if (!task) { addMessage('assistant', 'Uso: describe la tarea que quieres realizar'); sendBtn.disabled = false; sendBtn.style.display = 'flex'; stopBtn.style.display = 'none'; return; }
     startAgentAssistant();
     vscode.postMessage({ type: 'agentChat', task, model: modelsEl.value || '', contextFiles: getContextFiles() });
   } else {
@@ -2160,6 +2300,21 @@ codeOnlyToggleEl.addEventListener('click', () => {
 profileBadgeEl.addEventListener('click', () => { vscode.postMessage({ type: 'switchProfile' }); });
 addFileBtnEl.addEventListener('click', () => { vscode.postMessage({ type: 'pickContextFile' }); });
 
+function setMode(mode) {
+  currentMode = mode;
+  modeAskBtn.classList.toggle('active', mode === 'ask');
+  modeAgentBtn.classList.toggle('active', mode === 'agent');
+  if (mode === 'agent') {
+    promptEl.placeholder = 'Describe la tarea: crear archivos, ejecutar git, refactorizar...';
+    addFileBtnEl.style.display = '';
+  } else {
+    promptEl.placeholder = 'Pregunta algo o usa /explain, /test, /fix...';
+    addFileBtnEl.style.display = '';
+  }
+}
+modeAskBtn.addEventListener('click', () => setMode('ask'));
+modeAgentBtn.addEventListener('click', () => setMode('agent'));
+
 function getContextFiles() {
   const files = [];
   contextChipsEl.querySelectorAll('.ctx-chip').forEach(chip => {
@@ -2193,6 +2348,20 @@ window.addEventListener('message', (e) => {
   if (msg.type === 'agentError') { addAgentAnswer('[Error: ' + (msg.text || 'unknown') + ']'); finishAgent(); return; }
   if (msg.type === 'agentFileCreate') { addAgentFileOp('create', msg.iteration || 0, msg.path || '', msg.opId || ''); return; }
   if (msg.type === 'agentFileModify') { addAgentFileOp('modify', msg.iteration || 0, msg.path || '', msg.opId || ''); return; }
+  if (msg.type === 'agentFileDelete') { addAgentFileOp('delete', msg.iteration || 0, msg.path || '', msg.opId || ''); return; }
+  if (msg.type === 'agentRunCommand') { addAgentCmdOp(msg.iteration || 0, msg.command || '', msg.opId || ''); return; }
+  if (msg.type === 'agentCommandRunning') { updateCmdOpStatus(msg.opId || '', 'running', 'Ejecutando...'); return; }
+  if (msg.type === 'agentCommandResult') {
+    const opId = msg.opId || '';
+    const accepted = !!msg.accepted;
+    if (accepted) {
+      showCmdOutput(opId, msg.output || '(sin salida)');
+      updateCmdOpStatus(opId, 'accepted', msg.exitCode === 0 ? 'Comando ejecutado ✓' : 'Comando finalizado (código: ' + msg.exitCode + ')');
+    } else {
+      updateCmdOpStatus(opId, 'rejected', 'Comando rechazado');
+    }
+    return;
+  }
   if (msg.type === 'agentFileResult') {
     const opId = msg.opId || '';
     const accepted = !!msg.accepted;
@@ -2542,6 +2711,58 @@ function activate(context) {
     }
   };
 
+  const handleAgentFileDelete = async (filePath, webview) => {
+    const wsFolder = vscode.workspace.workspaceFolders?.[0];
+    if (!wsFolder) { vscode.window.showErrorMessage('No hay workspace abierto'); return; }
+
+    const uri = vscode.Uri.joinPath(wsFolder.uri, filePath);
+    const decision = await vscode.window.showWarningMessage(
+      '🤖 Agent propone ELIMINAR: ' + filePath, { modal: true }, 'Eliminar', 'Cancelar'
+    );
+    if (decision === 'Eliminar') {
+      try {
+        await vscode.workspace.fs.delete(uri, { useTrash: true });
+        vscode.window.showInformationMessage('Archivo eliminado (papelera): ' + filePath);
+        webview.postMessage({ type: 'agentFileResult', path: filePath, action: 'delete', accepted: true });
+      } catch (err) {
+        vscode.window.showErrorMessage('Error al eliminar: ' + (err.message || err));
+        webview.postMessage({ type: 'agentFileResult', path: filePath, action: 'delete', accepted: false });
+      }
+    } else {
+      webview.postMessage({ type: 'agentFileResult', path: filePath, action: 'delete', accepted: false });
+    }
+  };
+
+  const handleAgentRunCommand = async (command, opId, webview) => {
+    const wsFolder = vscode.workspace.workspaceFolders?.[0];
+    if (!wsFolder) { vscode.window.showErrorMessage('No hay workspace abierto'); return; }
+
+    // Security: block dangerous patterns
+    const blocked = /rm\s+-rf\s+\/|:(){ :|dd\s+if=|mkfs\.|>\s*\/dev\/sd/i;
+    if (blocked.test(command)) {
+      vscode.window.showErrorMessage('Comando bloqueado por seguridad: ' + command);
+      webview.postMessage({ type: 'agentCommandResult', opId, accepted: false });
+      return;
+    }
+
+    const cp = require('child_process');
+    const cwd = wsFolder.uri.fsPath;
+
+    webview.postMessage({ type: 'agentCommandRunning', opId });
+    try {
+      const result = await new Promise((resolve, reject) => {
+        cp.exec(command, { cwd, timeout: 30000, maxBuffer: 1024 * 512 }, (err, stdout, stderr) => {
+          if (err && err.killed) { reject(new Error('Comando cancelado por timeout (30s)')); return; }
+          resolve({ exitCode: err ? err.code || 1 : 0, stdout: stdout || '', stderr: stderr || '' });
+        });
+      });
+      const output = (result.stdout + (result.stderr ? '\n[stderr] ' + result.stderr : '')).trim();
+      webview.postMessage({ type: 'agentCommandResult', opId, accepted: true, output, exitCode: result.exitCode });
+    } catch (err) {
+      webview.postMessage({ type: 'agentCommandResult', opId, accepted: true, output: 'Error: ' + (err.message || err), exitCode: 1 });
+    }
+  };
+
   const guessLanguageFromPath = (p) => {
     const ext = String(p || '').split('.').pop()?.toLowerCase() || '';
     const map = { js: 'javascript', ts: 'typescript', go: 'go', py: 'python', rs: 'rust', java: 'java', rb: 'ruby', md: 'markdown', json: 'json', yaml: 'yaml', yml: 'yaml', html: 'html', css: 'css', sh: 'shellscript', bash: 'shellscript', sql: 'sql', xml: 'xml', toml: 'toml' };
@@ -2611,6 +2832,16 @@ function activate(context) {
               pendingFileOps.set(opId, { type: 'modify', path: ev.file_path, content: ev.file_content });
               webview.postMessage({ type: 'agentFileModify', iteration: ev.iteration, path: ev.file_path, opId });
             }
+            else if (ev.event === 'file_delete') {
+              const opId = 'fileop-' + (++fileOpSeq);
+              pendingFileOps.set(opId, { type: 'delete', path: ev.file_path });
+              webview.postMessage({ type: 'agentFileDelete', iteration: ev.iteration, path: ev.file_path, opId });
+            }
+            else if (ev.event === 'run_command') {
+              const opId = 'cmdop-' + (++fileOpSeq);
+              pendingFileOps.set(opId, { type: 'command', command: ev.file_content });
+              webview.postMessage({ type: 'agentRunCommand', iteration: ev.iteration, command: ev.file_content, opId });
+            }
           },
           (err) => {
             if (err) webview.postMessage({ type: 'agentError', text: err.message || String(err) });
@@ -2641,6 +2872,8 @@ function activate(context) {
         pendingFileOps.delete(opId);
         if (op.type === 'create') {
           await handleAgentFileCreate(op.path, op.content, webview);
+        } else if (op.type === 'delete') {
+          await handleAgentFileDelete(op.path, webview);
         } else {
           await handleAgentFileModify(op.path, op.content, webview);
         }
@@ -2651,6 +2884,20 @@ function activate(context) {
         const opId = msg.opId;
         pendingFileOps.delete(opId);
         webview.postMessage({ type: 'agentFileResult', opId, accepted: false });
+        return;
+      }
+      if (msg.type === 'acceptCommand') {
+        const opId = msg.opId;
+        const op = pendingFileOps.get(opId);
+        if (!op || op.type !== 'command') return;
+        pendingFileOps.delete(opId);
+        await handleAgentRunCommand(op.command, opId, webview);
+        return;
+      }
+      if (msg.type === 'rejectCommand') {
+        const opId = msg.opId;
+        pendingFileOps.delete(opId);
+        webview.postMessage({ type: 'agentCommandResult', opId, accepted: false });
         return;
       }
       if (msg.type === 'compare') {
@@ -2740,6 +2987,28 @@ function activate(context) {
         } else {
           await previewAndApplyCode(editor, code, msg.lang);
         }
+        return;
+      }
+      if (msg.type === 'insertToFile') {
+        const code = String(msg.code || '');
+        if (!code.trim()) return;
+        const wsFolder = vscode.workspace.workspaceFolders?.[0];
+        if (!wsFolder) { vscode.window.showErrorMessage('No hay workspace abierto'); return; }
+        const uris = await vscode.window.showOpenDialog({
+          canSelectMany: false,
+          defaultUri: wsFolder.uri,
+          openLabel: 'Insertar código en este archivo',
+          filters: { 'All files': ['*'] },
+        });
+        if (!uris || uris.length === 0) return;
+        const targetUri = uris[0];
+        const doc = await vscode.workspace.openTextDocument(targetUri);
+        const editor = await vscode.window.showTextDocument(doc, { preview: false });
+        const position = editor.selection.active;
+        await editor.edit((editBuilder) => {
+          editBuilder.insert(position, code);
+        });
+        vscode.window.showInformationMessage('Código insertado en: ' + vscode.workspace.asRelativePath(targetUri));
         return;
       }
     });
@@ -3123,6 +3392,28 @@ function activate(context) {
         return;
       }
 
+      if (msg.type === 'agentChat') {
+        const task = String(msg.task || '').trim();
+        const model = String(msg.model || getConfig().chatModel);
+        const extraFiles = Array.isArray(msg.contextFiles) ? msg.contextFiles : [];
+        if (!task) { chatPanel?.webview.postMessage({ type: 'agentError', text: 'Tarea vacía' }); return; }
+        const wsContext = await gatherWorkspaceContext(extraFiles);
+        streamAgentAutopilot(task, model, wsContext,
+          (ev) => {
+            if (ev.event === 'thinking') chatPanel?.webview.postMessage({ type: 'agentThinking', iteration: ev.iteration, content: ev.content });
+            else if (ev.event === 'tool_call') chatPanel?.webview.postMessage({ type: 'agentToolCall', iteration: ev.iteration, tool: ev.tool, args: ev.args });
+            else if (ev.event === 'tool_result') chatPanel?.webview.postMessage({ type: 'agentToolResult', iteration: ev.iteration, tool: ev.tool, success: ev.success, output: ev.output });
+            else if (ev.event === 'answer') chatPanel?.webview.postMessage({ type: 'agentAnswer', content: ev.content });
+            else if (ev.event === 'error') chatPanel?.webview.postMessage({ type: 'agentError', text: ev.content });
+          },
+          (err) => {
+            if (err) chatPanel?.webview.postMessage({ type: 'agentError', text: err.message || String(err) });
+            else chatPanel?.webview.postMessage({ type: 'agentDone' });
+          },
+        );
+        return;
+      }
+
       if (msg.type === 'compare') {
         const prompt = String(msg.text || '').trim();
         if (!prompt) {
@@ -3243,6 +3534,27 @@ function activate(context) {
         } else {
           await previewAndApplyCode(editor, code, msg.lang);
         }
+      }
+      if (msg.type === 'insertToFile') {
+        const code = String(msg.code || '');
+        if (!code.trim()) return;
+        const wsFolder = vscode.workspace.workspaceFolders?.[0];
+        if (!wsFolder) { vscode.window.showErrorMessage('No hay workspace abierto'); return; }
+        const uris = await vscode.window.showOpenDialog({
+          canSelectMany: false,
+          defaultUri: wsFolder.uri,
+          openLabel: 'Insertar código en este archivo',
+          filters: { 'All files': ['*'] },
+        });
+        if (!uris || uris.length === 0) return;
+        const targetUri = uris[0];
+        const doc = await vscode.workspace.openTextDocument(targetUri);
+        const editor2 = await vscode.window.showTextDocument(doc, { preview: false });
+        const position = editor2.selection.active;
+        await editor2.edit((editBuilder) => {
+          editBuilder.insert(position, code);
+        });
+        vscode.window.showInformationMessage('Código insertado en: ' + vscode.workspace.asRelativePath(targetUri));
       }
     });
 

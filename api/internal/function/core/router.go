@@ -188,7 +188,7 @@ func (s *RouterService) selectModelWithCategory(prompt string) (string, string, 
 		return model, category, 0, requestID
 	}
 
-	promptVec, err := s.ollamaService.GetEmbedding("nomic-embed-text", prompt)
+	promptVec, err := s.ollamaService.GetEmbedding("nomic-embed-text:latest", prompt)
 	if err != nil || len(promptVec) == 0 {
 		s.logger.Warn("embedding del prompt fallo; aplicando fallback",
 			slog.String("request_id", requestID),
@@ -249,7 +249,7 @@ func (s *RouterService) ensureCategoryEmbeddings() error {
 	var loadErr error
 	s.loadOnce.Do(func() {
 		for category, sample := range s.categorySamples {
-			vec, err := s.ollamaService.GetEmbedding("nomic-embed-text", sample)
+			vec, err := s.ollamaService.GetEmbedding("nomic-embed-text:latest", sample)
 			if err != nil {
 				loadErr = fmt.Errorf("categoria %s: %w", category, err)
 				return

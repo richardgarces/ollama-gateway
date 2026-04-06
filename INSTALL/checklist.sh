@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
 # ============================================================
 #  Checklist de validación — Ollama SaaS Gateway
-#  Ejecutar desde la raíz del proyecto:
-#    bash docs/checklist.sh
-#    bash docs/checklist.sh --all         (ejecuta todo sin menú)
-#    bash docs/checklist.sh --category 3  (ejecuta categoría 3)
+#  Se puede ejecutar desde cualquier ubicación:
+#    bash INSTALL/checklist.sh
+#    bash INSTALL/checklist.sh --all         (ejecuta todo sin menú)
+#    bash INSTALL/checklist.sh --category 3  (ejecuta categoría 3)
 # ============================================================
 set -uo pipefail
+
+# ── Resolver raíz del proyecto ───────────────────────────────
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$PROJECT_ROOT"
 
 # ── Colores ──────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -193,8 +198,8 @@ cat_modelos() {
     ((FAIL++))
   fi
 
-  check "Modelo de embeddings (nomic-embed-text)" \
-    "curl -sf -m 5 http://localhost:11434/api/tags | jq -r '.models[].name' | grep -c nomic-embed" "1"
+  check "Modelo de embeddings (nomic-embed-text:latest)" \
+    "curl -sf -m 5 http://localhost:11434/api/tags | jq -r '.models[].name' | grep -c nomic-embed-text:latest" "1"
 }
 
 cat_auth() {

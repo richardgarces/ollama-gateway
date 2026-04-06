@@ -516,7 +516,7 @@ func (s *OllamaService) effectiveEmbeddingModel(requested string) string {
 		requested = s.embedModel
 	}
 	if requested == "" {
-		requested = "nomic-embed-text"
+		requested = "nomic-embed-text:latest"
 	}
 	return s.effectiveModel(requested, false)
 }
