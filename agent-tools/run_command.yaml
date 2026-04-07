@@ -1,0 +1,6 @@
+name: run_command
+description: Ejecuta un comando de shell controlado en el directorio del repositorio. Solo comandos permitidos.
+type: function
+parameters:
+  command: Comando a ejecutar (ej: ls, cat archivo.txt)
+  args: Argumentos adicionales (opcional)
